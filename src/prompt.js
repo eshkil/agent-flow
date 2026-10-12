@@ -1,0 +1,26 @@
+// Текст запиту до Claude. Блок «Контекст запуску» — маркер для скілів:
+// за ним вони знають, що це явна команда людини, а не самоініціатива агента.
+
+function buildPrompt({ repo, decision, sender, trigger, signalAt, runUrl }) {
+  const { skill, mode, issue, pr } = decision;
+  const vars = [`REPO=${repo}`];
+  if (issue) vars.push(`ISSUE=${issue}`);
+  if (pr) vars.push(`PR=${pr}`);
+
+  const modeText = mode === 'rework'
+    ? 'Режим: rework — прочитай коментарі людей після свого останнього коментаря (підписаного `<sub>🤖`) і доопрацюй результат за ними. У результаті додай блок «Що змінилося».'
+    : 'Режим: first — звичайний перший прохід цього кроку.';
+
+  return [
+    `Виконай скіл \`agent-flow:${skill}\` для ${vars.join(' ')}.`,
+    '',
+    '## Контекст запуску (диспетчер agent-flow)',
+    `- Це явна команда людини @${sender}: лейбл \`agent:${trigger}\` поставлено ${signalAt}.`,
+    '- Перевірки «зупинись, якщо останній коментар від бота» і «вже оброблено» для цього запуску не діють.',
+    '- Лейбли `agent:*` не чіпай — ними керує диспетчер.',
+    `- ${modeText}`,
+    `- Журнал запуску: ${runUrl}`,
+  ].join('\n');
+}
+
+module.exports = { buildPrompt };
