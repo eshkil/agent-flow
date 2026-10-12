@@ -17,15 +17,29 @@ gh pr view $PR -R "$REPO" --json state,isDraft,mergeable,headRefName,headRefOid,
 
 Диспетчер перевіряв гейт до запуску, але стан міг змінитися. Перевір кожну умову сам:
 
-1. Стан `OPEN`, не draft, `mergeable` ≠ `CONFLICTING`.
-2. Є лейбл `ai:reviewed`, і після його встановлення не було комітів:
+1. Стан `OPEN`, не draft, `mergeable` ≠ `CONFLICTING`. Якщо `mergeable` = `UNKNOWN` — зачекай ~10 с
+   і перечитай (до 3 разів); лишилось `UNKNOWN` — відмовся.
+2. Є лейбл `ai:reviewed`, і після його встановлення не було комітів.
+   Основний захист — сам лейбл: workflow знімає `ai:reviewed` на кожен пуш у PR. Перевірка timeline
+   нижче — додаткова й наближена: `committed` має час коміту, а не пушу.
    ```bash
    gh api "repos/$REPO/issues/$PR/timeline" --paginate \
      -q '.[] | select(.event=="committed" or .event=="head_ref_force_pushed" or (.event=="labeled" and .label.name=="ai:reviewed")) | {event, at: (.created_at // .committer.date)}'
    ```
    Останній `labeled ai:reviewed` має бути пізнішим за останній коміт / force-push.
-3. Останній відгук людини зі списку дозволених — `APPROVED`, і його `commit_id` == `headRefOid`.
-4. `gh pr checks $PR -R "$REPO"` — жодної червоної або незавершеної перевірки (перевірок немає зовсім — ок).
+3. Approve людини на поточному коміті:
+   ```bash
+   gh api "repos/$REPO/pulls/$PR/reviews" --paginate \
+     -q '.[] | {login: .user.login, type: .user.type, state, commit_id, submitted_at}'
+   ```
+   Для кожного користувача візьми його останній відгук, що не `COMMENTED`. Потрібен хоча б один
+   `APPROVED` із `commit_id` == `headRefOid` від не-бота (`type` ≠ `"Bot"`), чиї права в репозиторії —
+   `admin`, `maintain` або `write`:
+   ```bash
+   gh api "repos/$REPO/collaborators/<login>/permission" -q .permission
+   ```
+4. `gh pr checks $PR -R "$REPO"` — суди за виводом, а не за кодом виходу: код 1 з «no checks reported» —
+   перевірок немає, це ок; код 8 — є незавершені, це не ок; будь-яка червона — не ок.
 
 Хоч одна умова не виконана — коментар зі списком того, чого бракує, і **зупинись без дій**.
 

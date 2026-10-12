@@ -48,7 +48,7 @@ git fetch origin --prune && git log --oneline -5 origin/$BASE
 називай `$BASE`, а не `main` — у проєкті це може бути `master`, `develop` тощо.
 
 **Стан тікета.** Працюй лише якщо є `type:bug` + `ai:triaged`, і немає `ai:in-progress`,
-`needs-info`, `needs-human`. Постав `ai:in-progress`, зніми його наприкінці за будь-якого результату.
+`needs-human`. Постав `ai:in-progress`, зніми його наприкінці за будь-якого результату.
 Якщо потрібного лейбла в репозиторії немає, `gh issue edit` впаде — створи його
 (`gh label create "<лейбл>" -R "$REPO"`) і повтори; немає прав — повідом у підсумку.
 
@@ -84,7 +84,7 @@ git fetch origin --prune && git log --oneline -5 origin/$BASE
 Застосунок запускай так, як описано в проєкті (dev-сервер, статичний файл, `webServer` у
 конфігу Playwright тощо).
 
-Якщо кроків бракує або вони суперечливі — не вигадуй. Постав `needs-info`,
+Якщо кроків бракує або вони суперечливі — не вигадуй. Постав `needs-human`,
 напиши, який саме крок не вдалося виконати й чому.
 
 **Не відтворилося?** Постав `bug:not-reproducible`, напиши коментар із:
@@ -214,7 +214,7 @@ Fixes #$ISSUE
 ![після](<IMG_URL after-$ISSUE-result.png>)
 
 Тест `<шлях до тесту>` падав до фікса, тепер зелений. Уся сюїта: N passed.
-PR: #<номер> — мердж робить людина.
+PR: #<номер> — рев'ю — `agent:go`, мердж — Approve + `agent:go`.
 ```
 
 Далі зніми `ai:in-progress`.

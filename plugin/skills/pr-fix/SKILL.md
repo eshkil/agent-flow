@@ -69,7 +69,7 @@ gh pr edit $PR -R "$REPO" --remove-label ai:reviewed
 На кожне зауваження до рядка — відповідь у тому ж треді:
 
 ```bash
-gh api "repos/$REPO/pulls/$PR/comments/<id>/replies" -f body="Виправлено в <sha>: <що саме>"
+gh api "repos/$REPO/pulls/$PR/comments/<id>/replies" -f body="$(printf 'Виправлено в <sha>: <що саме>\n\n<sub>🤖 Доопрацювання PR</sub>')"
 ```
 
 Підсумковий коментар у PR (через `--body-file`):
