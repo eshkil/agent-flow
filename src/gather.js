@@ -40,6 +40,9 @@ function latestApprovals(reviews) {
     .map(r => ({ login: r.user.login, commitId: r.commit_id }));
 }
 
+// Час коміту, а не пушу: committer.date — це час створення коміту. Надійний захист
+// від пушу після ai:reviewed — окремий job у workflow, що знімає ai:reviewed на
+// pull_request synchronize; ця перевірка — додаткова.
 function pushAndReviewTimes(timeline) {
   let lastPushAt = null;
   let reviewedLabelAt = null;
@@ -62,7 +65,15 @@ function summarizeChecks(checkRuns, combined) {
   return 'success';
 }
 
-async function loadPr(gh, repo, number) {
+// Власний run агента (ownRunId) не рахується як перевірка: інакше його in_progress
+// тримає checks у pending назавжди й гейт мерджу ніколи не пройде.
+function withoutOwnRun(checkRuns, ownRunId) {
+  if (ownRunId == null) return checkRuns;
+  const marker = `/actions/runs/${ownRunId}/`;
+  return checkRuns.filter(r => !(r.details_url || '').includes(marker));
+}
+
+async function loadPr(gh, repo, number, ownRunId) {
   const p = await gh.rest(`/repos/${repo}/pulls/${number}`);
   const [reviews, timeline, runs, combined] = await Promise.all([
     gh.restAll(`/repos/${repo}/pulls/${number}/reviews?per_page=100`),
@@ -79,11 +90,11 @@ async function loadPr(gh, repo, number) {
     headSha: p.head.sha,
     ...pushAndReviewTimes(timeline),
     approvals: latestApprovals(reviews),
-    checks: summarizeChecks(runs.check_runs || [], combined || {}),
+    checks: summarizeChecks(withoutOwnRun(runs.check_runs || [], ownRunId), combined || {}),
   };
 }
 
-async function gather({ repo, kind, number, agentLogin, allowedUsers }, gh) {
+async function gather({ repo, kind, number, agentLogin, allowedUsers, ownRunId }, gh) {
   const [owner, name] = repo.split('/');
   const item = await gh.rest(`/repos/${repo}/issues/${number}`);
 
@@ -94,7 +105,7 @@ async function gather({ repo, kind, number, agentLogin, allowedUsers }, gh) {
     const data = await gh.graphql(LINKED_PRS, { owner, name, number });
     prNumber = pickLinkedPr(data.repository.issue.closedByPullRequestsReferences.nodes);
   }
-  const pr = prNumber ? await loadPr(gh, repo, prNumber) : null;
+  const pr = prNumber ? await loadPr(gh, repo, prNumber, ownRunId) : null;
 
   // Обговорення задачі: issue, а для PR — ще його розмова й коментарі до рядків.
   const comments = [...await gh.restAll(`/repos/${repo}/issues/${number}/comments?per_page=100`)];

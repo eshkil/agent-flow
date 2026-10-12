@@ -127,6 +127,17 @@ test('gather: checks — failure перемагає pending, pending — success
   assert.equal(s.pr.checks, 'none');
 });
 
+test('gather: власний run агента не блокує checks (ownRunId)', async () => {
+  const runs = [
+    { status: 'completed', conclusion: 'success' },
+    { status: 'in_progress', conclusion: null, details_url: 'https://github.com/eshkil/kando-board/actions/runs/777/job/1' },
+  ];
+  let s = await gather({ ...ctx, ownRunId: 777 }, fakeGithub(withPr({ checkRuns: runs })));
+  assert.equal(s.pr.checks, 'success');
+  s = await gather(ctx, fakeGithub(withPr({ checkRuns: runs })));
+  assert.equal(s.pr.checks, 'pending');
+});
+
 test('gather: відгук людини в обговоренні PR теж рахується', async () => {
   const routes = withPr();
   routes[`GET /repos/${R}/issues/12/comments?per_page=100`] = [comment(AGENT, 'спека', '2026-10-01T10:00:00Z')];
