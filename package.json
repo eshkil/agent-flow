@@ -1,0 +1,7 @@
+{
+  "name": "agent-flow",
+  "private": true,
+  "description": "Диспетчер агентного флоу для GitHub-дощок Kando",
+  "engines": { "node": ">=20" },
+  "scripts": { "test": "node --test test/*.test.js" }
+}
