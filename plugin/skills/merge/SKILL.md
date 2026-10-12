@@ -64,15 +64,10 @@ gh pr merge $PR -R "$REPO" --squash --delete-branch
 gh issue view <N> -R "$REPO" --json state -q .state
 ```
 
-Ще відкрите — `gh issue close <N> -R "$REPO" --reason completed`. Підсумковий коментар у issue:
+Ще відкрите — `gh issue close <N> -R "$REPO" --reason completed`.
 
-```markdown
-## ✅ Змерджено
-
-PR #<PR> змерджено (squash), гілку видалено.
-
-<sub>🤖 Мердж</sub>
-```
+Підсумкового коментаря **не пиши**: про мердж і закриття GitHub і так сповіщає, а коментар —
+лише зайвий лист людині.
 
 ## Заборонено
 
