@@ -1,0 +1,7 @@
+{
+  "name": "agent-flow",
+  "owner": { "name": "eshkil" },
+  "plugins": [
+    { "name": "agent-flow", "source": "./plugin", "description": "Скіли агентного флоу" }
+  ]
+}
