@@ -48,3 +48,23 @@ test('finish: порожній LOCK_NUMBERS → нічого не робить',
   await finish({ env: env({ LOCK_NUMBERS: '' }), gh });
   assert.equal(gh.calls.length, 0);
 });
+
+const httpErr = status => () => { const e = new Error(`HTTP ${status}`); e.status = status; throw e; };
+
+test('finish: 5xx на одному номері не зупиняє решту номерів', async () => {
+  const gh = fakeGithub({ ...routes(), [`DELETE /repos/${R}/issues/12/labels/agent%3Arunning`]: httpErr(500) });
+  await assert.rejects(finish({ env: env(), gh }));
+  assert.ok(gh.calls.some(c => c.method === 'DELETE' && c.path === `/repos/${R}/issues/40/labels/agent%3Arunning`));
+});
+
+test('finish: 5xx при знятті лейбла не пропускає ai:failed і коментар', async () => {
+  const gh = fakeGithub({ ...routes(), [`DELETE /repos/${R}/issues/12/labels/agent%3Arunning`]: httpErr(500) });
+  await assert.rejects(finish({ env: env({ CLAUDE_OUTCOME: 'failure' }), gh }));
+  assert.ok(gh.calls.some(c => c.method === 'POST' && c.path === `/repos/${R}/issues/12/labels`));
+  assert.ok(gh.calls.some(c => c.method === 'POST' && c.path === `/repos/${R}/issues/12/comments`));
+});
+
+test('finish: 404 при знятті лейбла толерується', async () => {
+  const gh = fakeGithub({ ...routes(), [`DELETE /repos/${R}/issues/12/labels/agent%3Arunning`]: httpErr(404) });
+  await assert.doesNotReject(finish({ env: env(), gh }));
+});

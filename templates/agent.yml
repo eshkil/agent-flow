@@ -57,4 +57,7 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           PR: ${{ github.event.pull_request.number }}
-        run: gh pr edit "$PR" -R "$GITHUB_REPOSITORY" --remove-label ai:reviewed || true
+        run: |
+          out=$(gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$PR/labels/ai:reviewed" 2>&1) && exit 0
+          grep -q "Label does not exist" <<<"$out" && exit 0
+          echo "$out" >&2; exit 1
