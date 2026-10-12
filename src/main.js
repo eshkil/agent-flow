@@ -1,6 +1,7 @@
 // Крок «до Claude»: дозвіл, блокування, маршрутизація, коментарі-відмови, промпт.
-// Виходи кроку читає action.yml. lock_numbers пишемо одразу після блокування:
-// якщо далі щось упаде, finish.js однаково зніме agent:running.
+// Виходи кроку читає action.yml. lock_numbers пишемо ДО блокування: якщо збій
+// станеться посеред циклу (наприклад, POST на другому номері), finish.js уже знає
+// номери і зніме agent:running; DELETE там ковтає 404 для номерів без лейбла.
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
@@ -80,11 +81,11 @@ async function run({ event, env, gh, setOutput }) {
     return stop();
   }
 
+  setOutput('lock_numbers', lockNumbers.join(','));
   for (const n of lockNumbers) {
     for (const l of ['ai:failed', 'needs-human', 'ai:in-progress']) await removeLabel(gh, repo, n, l);
     await gh.rest(`/repos/${repo}/issues/${n}/labels`, { method: 'POST', body: { labels: ['agent:running'] } });
   }
-  setOutput('lock_numbers', lockNumbers.join(','));
 
   setOutput('skill', decision.skill);
   setOutput('mode', decision.mode);

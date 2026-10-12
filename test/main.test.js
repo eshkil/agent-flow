@@ -118,3 +118,16 @@ test('main: allow-list порожній → дозволено власнику 
   await run({ event: event('agent:go'), env: env({ AGENT_ALLOWED_USERS: '' }), gh, setOutput });
   assert.equal(out.action, 'run');
 });
+
+test('main: збій POST блокування посеред кроку → lock_numbers уже записано, помилка піднімається', async () => {
+  const routes = issueRoutes([]);
+  routes[`POST /repos/${R}/issues/12/labels`] = () => {
+    const err = new Error('boom');
+    err.status = 500;
+    throw err;
+  };
+  const gh = fakeGithub(routes);
+  const { out, setOutput } = capture();
+  await assert.rejects(run({ event: event('agent:go'), env: env(), gh, setOutput }), /boom/);
+  assert.equal(out.lock_numbers, '12');
+});
