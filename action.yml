@@ -47,13 +47,14 @@ runs:
         bot_id: ${{ inputs.agent_user_id }}
         claude_args: >-
           --plugin-dir ${{ github.action_path }}/plugin
-          --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite
+          --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite,Skill
 
-    - if: always() && steps.route.outputs.lock_numbers != ''
+    - if: always() && (steps.route.outputs.lock_numbers != '' || steps.route.outcome == 'failure')
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/finish.js"
       env:
         GH_TOKEN: ${{ inputs.github_token }}
+        EVENT_NUMBER: ${{ steps.route.outputs.event_number }}
         LOCK_NUMBERS: ${{ steps.route.outputs.lock_numbers }}
         ROUTE_OUTCOME: ${{ steps.route.outcome }}
         CLAUDE_OUTCOME: ${{ steps.claude.outcome }}

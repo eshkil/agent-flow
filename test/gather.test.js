@@ -154,3 +154,27 @@ test('gather: сигнал на PR — pr описує сам PR, labels з PR',
   assert.equal(s.pr.number, 40);
   assert.deepEqual(s.labels, ['ai:reviewed']);
 });
+
+test('gather: службовий коментар диспетчера не відсікає відгук людини', async () => {
+  const s = await gather(ctx, fakeGithub(issueOnly(['ai:failed'], [
+    comment('eshkil', '## 🔍 Тріаж\n<sub>🤖 Автоматичний тріаж</sub>', '2026-10-01T10:00:00Z'),
+    comment('eshkil', 'Зроби кнопку праворуч', '2026-10-01T11:00:00Z'),
+    comment(AGENT, '❌ Агент не завершив роботу\n\n<sub>🤖 agent-flow</sub>', '2026-10-01T12:00:00Z'),
+  ])));
+  assert.equal(s.humanFeedback, true);
+  assert.equal(isAgentComment(comment('eshkil', 'x\n<sub>🤖 agent-flow</sub>', 't'), AGENT), true);
+});
+
+test('gather: тіло рев\'ю людини після коментаря агента = відгук', async () => {
+  const routes = withPr({ reviews: [{ user: { login: 'eshkil' }, state: 'CHANGES_REQUESTED', body: 'перейменуй', submitted_at: '2026-10-02T10:00:00Z', commit_id: 'abc' }] });
+  routes[`GET /repos/${R}/issues/12/comments?per_page=100`] = [comment(AGENT, 'спека', '2026-10-01T10:00:00Z')];
+  const s = await gather(ctx, fakeGithub(routes));
+  assert.equal(s.humanFeedback, true);
+});
+
+test('gather: рев\'ю без тіла (Approve) не є відгуком', async () => {
+  const routes = withPr({ reviews: [{ user: { login: 'eshkil' }, state: 'APPROVED', body: '', submitted_at: '2026-10-02T10:00:00Z', commit_id: 'abc' }] });
+  routes[`GET /repos/${R}/issues/12/comments?per_page=100`] = [comment(AGENT, 'спека', '2026-10-01T10:00:00Z')];
+  const s = await gather(ctx, fakeGithub(routes));
+  assert.equal(s.humanFeedback, false);
+});

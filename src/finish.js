@@ -2,11 +2,29 @@
 // ставить ai:failed на перший номер (той, на який людина дала сигнал).
 
 const { createClient } = require('./github');
+const { DISPATCHER_SIGNATURE } = require('./gather');
+
+const failureBody = (why, runUrl) =>
+  `❌ Агент не завершив роботу: ${why}.\nЖурнал: ${runUrl}\n\nПовторити — постав \`agent:go\` або \`agent:rework\` ще раз.\n\n${DISPATCHER_SIGNATURE}`;
 
 async function finish({ env, gh }) {
   const repo = env.GITHUB_REPOSITORY;
   const numbers = (env.LOCK_NUMBERS || '').split(',').map(Number).filter(Boolean);
-  if (!numbers.length) return;
+  if (!numbers.length) {
+    // Збій до блокування: лейблів agent:running немає, але сигнал не мусить зникнути мовчки.
+    const event = Number(env.EVENT_NUMBER);
+    if (env.ROUTE_OUTCOME === 'failure' && event) {
+      const errs = [];
+      try {
+        await gh.rest(`/repos/${repo}/issues/${event}/labels`, { method: 'POST', body: { labels: ['ai:failed'] } });
+      } catch (e) { errs.push(e); }
+      try {
+        await gh.rest(`/repos/${repo}/issues/${event}/comments`, { method: 'POST', body: { body: failureBody('запуск завершився з помилкою', env.RUN_URL) } });
+      } catch (e) { errs.push(e); }
+      if (errs.length) throw new Error(`finish: ${errs.length} помилка(и): ${errs.map(e => e.message).join('; ')}`);
+    }
+    return;
+  }
 
   // Збої не перериваємо на першій помилці: кожен крок виконується, а помилки збираються.
   const errors = [];
@@ -32,7 +50,7 @@ async function finish({ env, gh }) {
     try {
       await gh.rest(`/repos/${repo}/issues/${first}/comments`, {
         method: 'POST',
-        body: { body: `❌ Агент не завершив роботу: ${why}.\nЖурнал: ${env.RUN_URL}\n\nПовторити — постав \`agent:go\` або \`agent:rework\` ще раз.\n\n<sub>🤖 agent-flow</sub>` },
+        body: { body: failureBody(why, env.RUN_URL) },
       });
     } catch (e) {
       errors.push(e);

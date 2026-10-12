@@ -131,3 +131,18 @@ test('main: збій POST блокування посеред кроку → loc
   await assert.rejects(run({ event: event('agent:go'), env: env(), gh, setOutput }), /boom/);
   assert.equal(out.lock_numbers, '12');
 });
+
+test('main: event_number записано до першого запиту до API', async () => {
+  const out = {};
+  const gh = { calls: [], async rest() { assert.equal(out.event_number, '12'); throw new Error('boom'); } };
+  await assert.rejects(run({ event: event('agent:go'), env: env(), gh, setOutput: (k, v) => { out[k] = v; } }));
+  assert.equal(out.event_number, '12');
+});
+
+test('main: «агент уже працює» підказує, що робити із завислим запуском', async () => {
+  const gh = fakeGithub(issueRoutes(['agent:running']));
+  const { setOutput } = capture();
+  await run({ event: event('agent:go'), env: env(), gh, setOutput });
+  const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
+  assert.match(c.body.body, /зніми лейбл `agent:running` вручну/);
+});

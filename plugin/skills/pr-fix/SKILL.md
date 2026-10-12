@@ -35,7 +35,7 @@ gh api "repos/$REPO/pulls/$PR/reviews" -q '.[] | {user: .user.login, state, body
 
 Якщо є `ISSUE` — також `gh issue view $ISSUE -R "$REPO" --comments`.
 
-Зауваження — коментарі людей (не підписані `<sub>🤖`), написані після останнього коментаря агента.
+Зауваження — коментарі людей (не підписані `<sub>🤖`), написані після останнього коментаря агента (підписаного `<sub>🤖`), не враховуючи службові `<sub>🤖 agent-flow</sub>`.
 Склади з них нумерований список. Порожній — коментар «Не знайшов зауважень після мого останнього
 коментаря — що саме виправити?» і зупинись.
 
@@ -69,7 +69,7 @@ gh pr edit $PR -R "$REPO" --remove-label ai:reviewed
 На кожне зауваження до рядка — відповідь у тому ж треді:
 
 ```bash
-gh api "repos/$REPO/pulls/$PR/comments/<id>/replies" -f body="$(printf 'Виправлено в <sha>: <що саме>\n\n<sub>🤖 Доопрацювання PR</sub>')"
+gh api "repos/$REPO/pulls/$PR/comments/<id>/replies" -f body="$(printf '%s\n\n%s' "Виправлено в <sha>: <що саме>" '<sub>🤖 Доопрацювання PR</sub>')"
 ```
 
 Підсумковий коментар у PR (через `--body-file`):

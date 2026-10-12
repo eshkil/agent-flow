@@ -68,3 +68,21 @@ test('finish: 404 при знятті лейбла толерується', asyn
   const gh = fakeGithub({ ...routes(), [`DELETE /repos/${R}/issues/12/labels/agent%3Arunning`]: httpErr(404) });
   await assert.doesNotReject(finish({ env: env(), gh }));
 });
+
+test('finish: збій до блокування (LOCK_NUMBERS порожній) → ai:failed і коментар на EVENT_NUMBER', async () => {
+  const gh = fakeGithub({
+    [`POST /repos/${R}/issues/7/labels`]: [],
+    [`POST /repos/${R}/issues/7/comments`]: {},
+  });
+  await finish({ env: env({ LOCK_NUMBERS: '', EVENT_NUMBER: '7', ROUTE_OUTCOME: 'failure', CLAUDE_OUTCOME: 'skipped' }), gh });
+  assert.deepEqual(gh.calls.map(c => `${c.method} ${c.path}`), [
+    `POST /repos/${R}/issues/7/labels`, `POST /repos/${R}/issues/7/comments`,
+  ]);
+  assert.deepEqual(gh.calls[0].body, { labels: ['ai:failed'] });
+});
+
+test('finish: порожній LOCK_NUMBERS, але route успішний → нічого', async () => {
+  const gh = fakeGithub({});
+  await finish({ env: env({ LOCK_NUMBERS: '', EVENT_NUMBER: '7' }), gh });
+  assert.equal(gh.calls.length, 0);
+});

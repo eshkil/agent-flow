@@ -6,7 +6,7 @@
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { createClient } = require('./github');
-const { gather } = require('./gather');
+const { gather, DISPATCHER_SIGNATURE } = require('./gather');
 const { route } = require('./route');
 const { buildPrompt } = require('./prompt');
 
@@ -25,7 +25,7 @@ async function removeLabel(gh, repo, number, name) {
 }
 
 const comment = (gh, repo, number, body) =>
-  gh.rest(`/repos/${repo}/issues/${number}/comments`, { method: 'POST', body: { body: `${body}\n\n<sub>🤖 agent-flow</sub>` } });
+  gh.rest(`/repos/${repo}/issues/${number}/comments`, { method: 'POST', body: { body: `${body}\n\n${DISPATCHER_SIGNATURE}` } });
 
 async function labelsOf(gh, repo, number) {
   const it = await gh.rest(`/repos/${repo}/issues/${number}`);
@@ -43,6 +43,10 @@ async function run({ event, env, gh, setOutput }) {
   const allowedUsers = (env.AGENT_ALLOWED_USERS || event.repository.owner.login)
     .split(',').map(s => s.trim()).filter(Boolean);
   const stop = () => setOutput('action', 'stop');
+
+  // Номер сигналу — ДО першого запиту: якщо збій станеться до блокування,
+  // finish.js усе одно знає, де лишити ai:failed.
+  setOutput('event_number', String(number));
 
   await removeLabel(gh, repo, number, triggerLabel);
 
@@ -66,7 +70,7 @@ async function run({ event, env, gh, setOutput }) {
     || state.pr?.labels.includes('agent:running')
     || (linkedIssue && (await labelsOf(gh, repo, linkedIssue)).includes('agent:running'));
   if (running) {
-    await comment(gh, repo, number, 'Агент уже працює над цією задачею — дочекайся результату.');
+    await comment(gh, repo, number, 'Агент уже працює над цією задачею — дочекайся результату. Якщо запуск завис (у журналі Actions немає активного запуску) — зніми лейбл `agent:running` вручну й постав сигнал знову.');
     return stop();
   }
 

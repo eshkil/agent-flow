@@ -38,8 +38,13 @@ gh pr view $PR -R "$REPO" --json state,isDraft,mergeable,headRefName,headRefOid,
    ```bash
    gh api "repos/$REPO/collaborators/<login>/permission" -q .permission
    ```
-4. `gh pr checks $PR -R "$REPO"` — суди за виводом, а не за кодом виходу: код 1 з «no checks reported» —
-   перевірок немає, це ок; код 8 — є незавершені, це не ок; будь-яка червона — не ок.
+4. Перевірки. Власний job `agent` цього запуску — pending-перевірка на head PR, тож його ігноруй:
+   ```bash
+   gh pr checks $PR -R "$REPO" --json name,state,link
+   ```
+   Відкинь записи, чий `link` містить `/actions/runs/$GITHUB_RUN_ID/` (`GITHUB_RUN_ID` є в середовищі CI).
+   Суди за рештою: будь-яка `FAILURE`/`ERROR`/`CANCELLED` — відмовся; будь-яка `PENDING`/`IN_PROGRESS`/`QUEUED` —
+   відмовся; не лишилось жодної (або «no checks reported») — це ок.
 
 Хоч одна умова не виконана — коментар зі списком того, чого бракує, і **зупинись без дій**.
 

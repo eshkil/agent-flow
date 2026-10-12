@@ -2,6 +2,8 @@
 // timeline, checks і коментарі. Жодних рішень тут — лише факти.
 
 const SIGNATURE = '<sub>🤖';
+// Підпис службових коментарів диспетчера (відмови, «вже працює», dry run, збій).
+const DISPATCHER_SIGNATURE = '<sub>🤖 agent-flow</sub>';
 const TRIAGE_HEADER = '## 🔍 Тріаж';
 const QUESTIONS = '❓ Потрібно уточнити';
 
@@ -21,6 +23,8 @@ const ts = s => (s ? Date.parse(s) : null);
 function isAgentComment(c, agentLogin) {
   return c.user?.login === agentLogin || (c.body || '').includes(SIGNATURE);
 }
+
+const isServiceComment = c => (c.body || '').includes(DISPATCHER_SIGNATURE);
 
 // Як linkedPr у Kando: відкритий, інакше змерджений, інакше найсвіжіший.
 const RANK = { OPEN: 0, MERGED: 1, CLOSED: 2 };
@@ -81,7 +85,7 @@ async function loadPr(gh, repo, number, ownRunId) {
     gh.rest(`/repos/${repo}/commits/${p.head.sha}/check-runs?per_page=100`),
     gh.rest(`/repos/${repo}/commits/${p.head.sha}/status`),
   ]);
-  return {
+  const info = {
     number: p.number,
     state: p.merged ? 'merged' : p.state,
     labels: names(p.labels),
@@ -92,6 +96,7 @@ async function loadPr(gh, repo, number, ownRunId) {
     approvals: latestApprovals(reviews),
     checks: summarizeChecks(withoutOwnRun(runs.check_runs || [], ownRunId), combined || {}),
   };
+  return { info, reviews };
 }
 
 async function gather({ repo, kind, number, agentLogin, allowedUsers, ownRunId }, gh) {
@@ -105,18 +110,26 @@ async function gather({ repo, kind, number, agentLogin, allowedUsers, ownRunId }
     const data = await gh.graphql(LINKED_PRS, { owner, name, number });
     prNumber = pickLinkedPr(data.repository.issue.closedByPullRequestsReferences.nodes);
   }
-  const pr = prNumber ? await loadPr(gh, repo, prNumber, ownRunId) : null;
+  const loaded = prNumber ? await loadPr(gh, repo, prNumber, ownRunId) : null;
+  const pr = loaded ? loaded.info : null;
 
   // Обговорення задачі: issue, а для PR — ще його розмова й коментарі до рядків.
   const comments = [...await gh.restAll(`/repos/${repo}/issues/${number}/comments?per_page=100`)];
   if (pr) {
     if (pr.number !== number) comments.push(...await gh.restAll(`/repos/${repo}/issues/${pr.number}/comments?per_page=100`));
     comments.push(...await gh.restAll(`/repos/${repo}/pulls/${pr.number}/comments?per_page=100`));
+    // Тіло рев'ю («перейменуй» у Request changes / Comment) — теж відгук людини.
+    for (const r of loaded.reviews) {
+      if (r.state === 'PENDING' || !(r.body || '').trim()) continue;
+      comments.push({ user: r.user, body: r.body, created_at: r.submitted_at });
+    }
   }
   comments.sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
 
   const isHuman = c => allowedUsers.includes(c.user?.login) && !isAgentComment(c, agentLogin);
-  const lastAgent = comments.filter(c => isAgentComment(c, agentLogin)).pop();
+  // Службові коментарі диспетчера не людські, але й не межа відгуку: інакше відмова
+  // («агент уже працює», збій) відсікла б раніше написаний відгук людини.
+  const lastAgent = comments.filter(c => isAgentComment(c, agentLogin) && !isServiceComment(c)).pop();
   const since = lastAgent ? Date.parse(lastAgent.created_at) : -Infinity;
   const humanFeedback = comments.some(c => isHuman(c) && Date.parse(c.created_at) > since);
 
@@ -132,4 +145,4 @@ async function gather({ repo, kind, number, agentLogin, allowedUsers, ownRunId }
   };
 }
 
-module.exports = { gather, isAgentComment };
+module.exports = { gather, isAgentComment, DISPATCHER_SIGNATURE };
