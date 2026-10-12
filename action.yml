@@ -1,0 +1,60 @@
+name: agent-flow
+description: Диспетчер агентного флоу — запускає скіл Claude Code за лейблом agent:go / agent:rework
+inputs:
+  github_token:
+    description: Токен GitHub App eshkil-agent
+    required: true
+  claude_code_oauth_token:
+    description: CLAUDE_CODE_OAUTH_TOKEN (claude setup-token)
+    required: true
+  agent_login:
+    description: Логін бота App, напр. eshkil-agent[bot]
+    required: true
+  agent_user_id:
+    description: id користувача-бота App (для git-автора комітів)
+    required: true
+  allowed_users:
+    description: Логіни людей через кому; порожньо — власник репо
+    required: false
+    default: ''
+  dry_run:
+    description: '1 — лише коментар-рішення, без запуску Claude'
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    - id: route
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/main.js"
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        AGENT_LOGIN: ${{ inputs.agent_login }}
+        AGENT_ALLOWED_USERS: ${{ inputs.allowed_users }}
+        AGENT_DRY_RUN: ${{ inputs.dry_run }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    - id: claude
+      if: steps.route.outputs.action == 'run'
+      uses: anthropics/claude-code-action@v1
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+      with:
+        prompt: ${{ steps.route.outputs.prompt }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        github_token: ${{ inputs.github_token }}
+        bot_name: ${{ inputs.agent_login }}
+        bot_id: ${{ inputs.agent_user_id }}
+        claude_args: >-
+          --plugin-dir ${{ github.action_path }}/plugin
+          --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite
+
+    - if: always() && steps.route.outputs.lock_numbers != ''
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/src/finish.js"
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        LOCK_NUMBERS: ${{ steps.route.outputs.lock_numbers }}
+        ROUTE_OUTCOME: ${{ steps.route.outcome }}
+        CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
