@@ -48,6 +48,7 @@ runs:
         claude_args: >-
           --plugin-dir ${{ github.action_path }}/plugin
           --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite,Skill
+          --disallowedTools ScheduleWakeup,CronCreate,Monitor,RemoteTrigger
 
     - if: always() && (steps.route.outputs.lock_numbers != '' || steps.route.outcome == 'failure')
       shell: bash

@@ -28,3 +28,11 @@ test('режим rework описано явно', () => {
   assert.match(p, /Режим: rework/);
   assert.match(p, /Що змінилося/);
 });
+
+test('промпт попереджає про неінтерактивний запуск: без фонових агентів і очікувань', () => {
+  const p = buildPrompt({ ...base, decision: { skill: 'implement', mode: 'first', issue: 12, pr: null } });
+  assert.match(p, /неінтерактивн/);
+  assert.match(p, /run_in_background/);
+  assert.match(p, /ScheduleWakeup/);
+  assert.match(p, /запуш/);
+});

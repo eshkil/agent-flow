@@ -1,5 +1,7 @@
 // Крок «після Claude»: завжди знімає agent:running; при збої чи таймауті
 // ставить ai:failed на перший номер (той, на який людина дала сигнал).
+// Скіли знімають ai:in-progress наприкінці; якщо він лишився після «успішного»
+// Claude — сесія обірвалась без результату (напр. пішла чекати фонових агентів).
 
 const { createClient } = require('./github');
 const { DISPATCHER_SIGNATURE } = require('./gather');
@@ -37,23 +39,41 @@ async function finish({ env, gh }) {
     }
   }
 
-  const failed = env.ROUTE_OUTCOME === 'failure'
-    || ['failure', 'cancelled'].includes(env.CLAUDE_OUTCOME);
-  if (failed) {
-    const [first] = numbers;
+  // Завислий ai:in-progress знімаємо завжди; 404 — лейбла не було, усе гаразд.
+  const stuck = [];
+  for (const n of numbers) {
     try {
-      await gh.rest(`/repos/${repo}/issues/${first}/labels`, { method: 'POST', body: { labels: ['ai:failed'] } });
+      await gh.rest(`/repos/${repo}/issues/${n}/labels/${encodeURIComponent('ai:in-progress')}`, { method: 'DELETE' });
+      stuck.push(n);
+    } catch (e) {
+      if (e.status !== 404) errors.push(e);
+    }
+  }
+
+  const markFailed = async (n, why) => {
+    try {
+      await gh.rest(`/repos/${repo}/issues/${n}/labels`, { method: 'POST', body: { labels: ['ai:failed'] } });
     } catch (e) {
       errors.push(e);
     }
-    const why = env.CLAUDE_OUTCOME === 'cancelled' ? 'перевищено час або запуск скасовано' : 'запуск завершився з помилкою';
     try {
-      await gh.rest(`/repos/${repo}/issues/${first}/comments`, {
+      await gh.rest(`/repos/${repo}/issues/${n}/comments`, {
         method: 'POST',
         body: { body: failureBody(why, env.RUN_URL) },
       });
     } catch (e) {
       errors.push(e);
+    }
+  };
+
+  const failed = env.ROUTE_OUTCOME === 'failure'
+    || ['failure', 'cancelled'].includes(env.CLAUDE_OUTCOME);
+  if (failed) {
+    const why = env.CLAUDE_OUTCOME === 'cancelled' ? 'перевищено час або запуск скасовано' : 'запуск завершився з помилкою';
+    await markFailed(numbers[0], why);
+  } else {
+    for (const n of stuck) {
+      await markFailed(n, 'сесія закінчилась без результату (крок не доведено до кінця — лишився `ai:in-progress`)');
     }
   }
 

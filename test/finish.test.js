@@ -19,7 +19,37 @@ test('finish: успіх → лише зняти agent:running з усіх но�
   assert.deepEqual(calls, [
     `DELETE /repos/${R}/issues/12/labels/agent%3Arunning`,
     `DELETE /repos/${R}/issues/40/labels/agent%3Arunning`,
+    `DELETE /repos/${R}/issues/12/labels/ai%3Ain-progress`,
+    `DELETE /repos/${R}/issues/40/labels/ai%3Ain-progress`,
   ]);
+});
+
+test('finish: Claude «успішний», але ai:in-progress лишився → зняти, ai:failed і коментар «без результату»', async () => {
+  const gh = fakeGithub({ ...routes(), [`DELETE /repos/${R}/issues/12/labels/ai%3Ain-progress`]: [] });
+  await finish({ env: env(), gh });
+  const lbl = gh.calls.find(c => c.method === 'POST' && c.path === `/repos/${R}/issues/12/labels`);
+  assert.deepEqual(lbl.body, { labels: ['ai:failed'] });
+  const c = gh.calls.find(x => x.method === 'POST' && x.path === `/repos/${R}/issues/12/comments`);
+  assert.match(c.body.body, /без результату/);
+  assert.match(c.body.body, /https:\/\/run\/1/);
+});
+
+test('finish: ai:in-progress лишився на другому номері → коментар туди ж', async () => {
+  const gh = fakeGithub({
+    ...routes(),
+    [`DELETE /repos/${R}/issues/40/labels/ai%3Ain-progress`]: [],
+    [`POST /repos/${R}/issues/40/labels`]: [],
+    [`POST /repos/${R}/issues/40/comments`]: {},
+  });
+  await finish({ env: env(), gh });
+  assert.ok(gh.calls.some(c => c.method === 'POST' && c.path === `/repos/${R}/issues/40/comments`));
+  assert.ok(!gh.calls.some(c => c.method === 'POST' && c.path === `/repos/${R}/issues/12/comments`));
+});
+
+test('finish: збій Claude знімає й завислий ai:in-progress, коментар один', async () => {
+  const gh = fakeGithub({ ...routes(), [`DELETE /repos/${R}/issues/12/labels/ai%3Ain-progress`]: [] });
+  await finish({ env: env({ CLAUDE_OUTCOME: 'failure' }), gh });
+  assert.equal(gh.calls.filter(c => c.method === 'POST' && c.path.endsWith('/comments')).length, 1);
 });
 
 test('finish: збій Claude → ai:failed і коментар із посиланням на run', async () => {
