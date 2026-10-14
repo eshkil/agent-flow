@@ -14,6 +14,8 @@
 4. `src/finish.js` знімає `agent:running`; при збої чи таймауті ставить `ai:failed`
    і коментар із посиланням на запуск. Якщо Claude завершився «успішно», а скіл не зняв
    `ai:in-progress` (сесія обірвалась посеред кроку), — теж `ai:failed` і коментар.
+   Якщо запуск зупинився на ліміті підписки Claude, коментар каже «ліміт Claude,
+   відновлення …» (див. [Стан ліміту Claude](#стан-ліміту-claude)).
 
 | Етап | `agent:go` | `agent:rework` |
 |---|---|---|
@@ -37,6 +39,40 @@
 
 Завис `agent:running` (у журналі Actions немає активного запуску) — зніми лейбл
 вручну й постав сигнал знову.
+
+## Стан ліміту Claude
+
+`src/finish.js` розпізнає ліміт підписки з журналу сесії, що вже відбулася
+(`execution_file` claude-code-action, подія `rate_limit_event` зі `status: "rejected"`
+і `resetsAt`). Жодних додаткових запитів до Claude немає. При збої в журнал запуску
+пишеться група «Ліміт Claude у журналі сесії» — лише службові повідомлення про ліміт,
+без тексту сесії.
+
+Щоб Kando показував бейдж ліміту на дошці, задай у репо змінну `AGENT_STATUS_URL`
+(`https://<kando>/api/github/agent-status`) і секрет `AGENT_STATUS_SECRET` (той самий,
+що в Kando) та передай їх у дію:
+
+```yaml
+      - uses: eshkil/agent-flow@v1
+        with:
+          # …
+          status_url: ${{ vars.AGENT_STATUS_URL }}
+          status_secret: ${{ secrets.AGENT_STATUS_SECRET }}
+          timezone: Europe/Kyiv   # для часу в коментарі ai:failed; за замовчуванням UTC
+```
+
+Після запуску, де Claude справді стартував, дія шле `POST status_url` з тілом
+`{ts, repo, status: "ok" | "limit", until?}` і заголовком
+`X-Agent-Signature-256: sha256=<HMAC-SHA256 сирого тіла>`:
+
+- `ok` — після успішного запуску;
+- `limit` — коли ліміт розпізнано й відомий час відновлення (без часу Kando його не приймає,
+  тож тоді статус не шлеться);
+- інші збої стан не змінюють.
+
+Таймаут запиту — 10 с; помилка відправки лише пишеться в журнал і не впливає на `ai:failed`.
+Без `status_url` дія поводиться як раніше. Виходи дії `limit_reached` і `limit_until` —
+для власної реакції в workflow.
 
 ## Локально в Claude Code
 

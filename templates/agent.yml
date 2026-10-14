@@ -45,6 +45,11 @@ jobs:
           agent_user_id: ${{ vars.AGENT_USER_ID }}
           allowed_users: ${{ vars.AGENT_ALLOWED_USERS }}
           dry_run: ${{ vars.AGENT_DRY_RUN }}
+          # Стан ліміту Claude для Kando (бейдж на дошці) — розкоментуй і задай
+          # змінну AGENT_STATUS_URL та секрет AGENT_STATUS_SECRET:
+          # status_url: ${{ vars.AGENT_STATUS_URL }}
+          # status_secret: ${{ secrets.AGENT_STATUS_SECRET }}
+          # timezone: Europe/Kyiv
 
   review-reset:
     # Новий пуш у PR скасовує попереднє AI-рев'ю: схвалено було інший код.

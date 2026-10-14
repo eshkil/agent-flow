@@ -4,11 +4,11 @@
 // номери і зніме agent:running; DELETE там ковтає 404 для номерів без лейбла.
 
 const fs = require('node:fs');
-const crypto = require('node:crypto');
 const { createClient } = require('./github');
 const { gather, DISPATCHER_SIGNATURE } = require('./gather');
 const { route } = require('./route');
 const { buildPrompt } = require('./prompt');
+const { fileOutput } = require('./output');
 
 const PR_ISSUES = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -99,14 +99,6 @@ async function run({ event, env, gh, setOutput }) {
     runUrl: env.RUN_URL,
   }));
   setOutput('action', 'run');
-}
-
-// Багаторядкові значення — через heredoc-розділювач, як вимагає GITHUB_OUTPUT.
-function fileOutput(file) {
-  return (key, value) => {
-    const delim = `EOF_${crypto.randomUUID()}`;
-    fs.appendFileSync(file, `${key}<<${delim}\n${value}\n${delim}\n`);
-  };
 }
 
 if (require.main === module) {
