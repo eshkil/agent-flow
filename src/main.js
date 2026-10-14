@@ -8,6 +8,7 @@ const { createClient } = require('./github');
 const { gather, DISPATCHER_SIGNATURE } = require('./gather');
 const { route } = require('./route');
 const { buildPrompt } = require('./prompt');
+const { pickModel } = require('./model');
 const { fileOutput } = require('./output');
 
 const PR_ISSUES = `query($owner: String!, $name: String!, $number: Int!) {
@@ -81,8 +82,16 @@ async function run({ event, env, gh, setOutput }) {
     await comment(gh, repo, number, decision.reason);
     return stop();
   }
+  let model;
+  try {
+    model = pickModel(env.AGENT_MODEL, decision.skill);
+  } catch (e) {
+    await comment(gh, repo, number, `Помилка в змінній \`AGENT_MODEL\`: ${e.message}. Виправ її в налаштуваннях репозиторію й постав сигнал знову.`);
+    return stop();
+  }
   if (env.AGENT_DRY_RUN === '1') {
-    await comment(gh, repo, number, `Dry run: запустив би \`${decision.skill}\` у режимі \`${decision.mode}\` (етап \`${decision.stage}\`).`);
+    const modelText = model ? `модель \`${model}\`` : 'модель за замовчуванням';
+    await comment(gh, repo, number, `Dry run: запустив би \`${decision.skill}\` у режимі \`${decision.mode}\` (етап \`${decision.stage}\`), ${modelText}.`);
     return stop();
   }
 
@@ -94,6 +103,7 @@ async function run({ event, env, gh, setOutput }) {
 
   setOutput('skill', decision.skill);
   setOutput('mode', decision.mode);
+  setOutput('model', model);
   setOutput('prompt', buildPrompt({
     repo, decision, sender, trigger,
     signalAt: (event.pull_request || event.issue).updated_at,
