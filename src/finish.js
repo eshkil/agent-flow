@@ -55,11 +55,16 @@ async function finish({ env, gh, fetchImpl = fetch, setOutput = () => {}, log = 
     }
   }
 
-  const markFailed = async (n, why) => {
-    try {
-      await gh.rest(`/repos/${repo}/issues/${n}/labels`, { method: 'POST', body: { labels: ['ai:failed'] } });
-    } catch (e) {
-      errors.push(e);
+  // ai:limit поруч з ai:failed — причина збою для дошки Kando (картка відрізняє
+  // ліміт Claude від інших збоїв без читання коментарів). Знімає main.js.
+  // Окремими запитами: збій з ai:limit не має коштувати ai:failed.
+  const markFailed = async (n, why, labels = ['ai:failed']) => {
+    for (const label of labels) {
+      try {
+        await gh.rest(`/repos/${repo}/issues/${n}/labels`, { method: 'POST', body: { labels: [label] } });
+      } catch (e) {
+        errors.push(e);
+      }
     }
     try {
       await gh.rest(`/repos/${repo}/issues/${n}/comments`, {
@@ -86,7 +91,7 @@ async function finish({ env, gh, fetchImpl = fetch, setOutput = () => {}, log = 
     const why = limit.limited
       ? `ліміт Claude${limit.until ? `, відновлення ${formatUntil(limit.until, env.TIMEZONE)}` : ''}`
       : env.CLAUDE_OUTCOME === 'cancelled' ? 'перевищено час або запуск скасовано' : 'запуск завершився з помилкою';
-    await markFailed(numbers[0], why);
+    await markFailed(numbers[0], why, limit.limited ? ['ai:failed', 'ai:limit'] : ['ai:failed']);
   } else {
     for (const n of stuck) {
       await markFailed(n, 'сесія закінчилась без результату (крок не доведено до кінця — лишився `ai:in-progress`)');

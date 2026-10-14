@@ -149,6 +149,8 @@ test('finish: ліміт у журналі → коментар «ліміт Cla
   await finish({ env: statusEnv({ CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: limitLog() }), gh, fetchImpl, setOutput, log: quiet });
   const c = gh.calls.find(x => x.method === 'POST' && x.path === `/repos/${R}/issues/12/comments`);
   assert.match(c.body.body, /ліміт Claude, відновлення 14\.10 о 20:00 \(Europe\/Kyiv\)/);
+  const lbls = gh.calls.filter(x => x.method === 'POST' && x.path === `/repos/${R}/issues/12/labels`).map(x => x.body.labels).flat();
+  assert.deepEqual(lbls, ['ai:failed', 'ai:limit']);
   assert.equal(fetchImpl.calls.length, 1);
   assert.equal(fetchImpl.calls[0].json.status, 'limit');
   assert.equal(fetchImpl.calls[0].json.repo, R);
@@ -189,6 +191,8 @@ test('finish: звичайний збій → статус не змінюємо
   assert.equal(fetchImpl.calls.length, 0);
   const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
   assert.match(c.body.body, /запуск завершився з помилкою/);
+  const lbl = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/labels'));
+  assert.deepEqual(lbl.body, { labels: ['ai:failed'] });
 });
 
 test('finish: Claude не запускався (skipped) → статус не шлемо', async () => {
@@ -217,4 +221,13 @@ test('finish: журналу нема (EXECUTION_FILE порожній) → зв
   await finish({ env: statusEnv({ CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: '' }), gh, fetchImpl: fetchSpy(), setOutput: outputs(), log: quiet });
   const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
   assert.match(c.body.body, /запуск завершився з помилкою/);
+});
+
+test('finish: збій при ai:limit не скасовує ai:failed і коментар', async () => {
+  let n = 0;
+  const gh = fakeGithub({ ...routes(), [`POST /repos/${R}/issues/12/labels`]: () => { if (n++) throw Object.assign(new Error('HTTP 422'), { status: 422 }); return []; } });
+  await assert.rejects(finish({ env: statusEnv({ CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: limitLog() }), gh, fetchImpl: fetchSpy(), setOutput: outputs(), log: quiet }));
+  const posts = gh.calls.filter(x => x.method === 'POST' && x.path.endsWith('/labels')).map(x => x.body.labels[0]);
+  assert.deepEqual(posts, ['ai:failed', 'ai:limit']);
+  assert.ok(gh.calls.some(x => x.method === 'POST' && x.path.endsWith('/comments')));
 });

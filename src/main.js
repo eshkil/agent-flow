@@ -88,7 +88,7 @@ async function run({ event, env, gh, setOutput }) {
 
   setOutput('lock_numbers', lockNumbers.join(','));
   for (const n of lockNumbers) {
-    for (const l of ['ai:failed', 'needs-human', 'ai:in-progress']) await removeLabel(gh, repo, n, l);
+    for (const l of ['ai:failed', 'ai:limit', 'needs-human', 'ai:in-progress']) await removeLabel(gh, repo, n, l);
     await gh.rest(`/repos/${repo}/issues/${n}/labels`, { method: 'POST', body: { labels: ['agent:running'] } });
   }
 
