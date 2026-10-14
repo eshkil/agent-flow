@@ -93,11 +93,11 @@ async function finish({ env, gh, fetchImpl = fetch, setOutput = () => {}, log = 
     }
   }
 
-  // Інші збої стан ліміту не змінюють; limit без часу Kando не приймає.
+  // Інші збої стан ліміту не змінюють. limit без часу Kando показує
+  // «ліміт вичерпано», доки не прийде наступний ok.
   const send = status => sendStatus({ url: env.STATUS_URL, secret: env.STATUS_SECRET, repo, status, until: limit.until, fetchImpl, log });
   if (env.CLAUDE_OUTCOME === 'success') await send('ok');
-  else if (limit.until) await send('limit');
-  else if (limit.limited) log.warn('agent-status: ліміт без часу відновлення — статус не надіслано');
+  else if (limit.limited) await send('limit');
 
   if (errors.length) {
     throw new Error(`finish: ${errors.length} помилка(и): ${errors.map(e => e.message).join('; ')}`);

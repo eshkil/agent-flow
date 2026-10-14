@@ -156,7 +156,7 @@ test('finish: ліміт у журналі → коментар «ліміт Cla
   assert.deepEqual(setOutput.values, { limit_reached: 'true', limit_until: '2025-10-14T17:00:00.000Z' });
 });
 
-test('finish: ліміт без часу → «ліміт Claude» без часу, статус не шлемо (Kando вимагає until)', async () => {
+test('finish: ліміт без часу → «ліміт Claude» без часу, статус limit без until', async () => {
   const gh = fakeGithub(routes());
   const fetchImpl = fetchSpy();
   const setOutput = outputs();
@@ -164,7 +164,9 @@ test('finish: ліміт без часу → «ліміт Claude» без час
   await finish({ env: statusEnv({ CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: f }), gh, fetchImpl, setOutput, log: quiet });
   const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
   assert.match(c.body.body, /Агент не завершив роботу: ліміт Claude\./);
-  assert.equal(fetchImpl.calls.length, 0);
+  assert.equal(fetchImpl.calls.length, 1);
+  assert.equal(fetchImpl.calls[0].json.status, 'limit');
+  assert.equal('until' in fetchImpl.calls[0].json, false);
   assert.deepEqual(setOutput.values, { limit_reached: 'true', limit_until: '' });
 });
 
