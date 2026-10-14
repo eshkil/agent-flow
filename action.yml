@@ -21,6 +21,25 @@ inputs:
     description: '1 — лише коментар-рішення, без запуску Claude'
     required: false
     default: ''
+  status_url:
+    description: 'Куди слати стан ліміту Claude (Kando: https://<kando>/api/github/agent-status); порожньо — не слати'
+    required: false
+    default: ''
+  status_secret:
+    description: Спільний секрет HMAC для status_url (AGENT_STATUS_SECRET)
+    required: false
+    default: ''
+  timezone:
+    description: Часова зона для часу відновлення в коментарі ai:failed, напр. Europe/Kyiv
+    required: false
+    default: UTC
+outputs:
+  limit_reached:
+    description: "'true', якщо запуск зупинився на ліміті Claude"
+    value: ${{ steps.finish.outputs.limit_reached }}
+  limit_until:
+    description: Час відновлення ліміту (ISO 8601) або порожньо, якщо невідомий
+    value: ${{ steps.finish.outputs.limit_until }}
 runs:
   using: composite
   steps:
@@ -50,7 +69,8 @@ runs:
           --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite,Skill
           --disallowedTools ScheduleWakeup,CronCreate,Monitor,RemoteTrigger
 
-    - if: always() && (steps.route.outputs.lock_numbers != '' || steps.route.outcome == 'failure')
+    - id: finish
+      if: always() && (steps.route.outputs.lock_numbers != '' || steps.route.outcome == 'failure')
       shell: bash
       run: node "$GITHUB_ACTION_PATH/src/finish.js"
       env:
@@ -59,4 +79,8 @@ runs:
         LOCK_NUMBERS: ${{ steps.route.outputs.lock_numbers }}
         ROUTE_OUTCOME: ${{ steps.route.outcome }}
         CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        STATUS_URL: ${{ inputs.status_url }}
+        STATUS_SECRET: ${{ inputs.status_secret }}
+        TIMEZONE: ${{ inputs.timezone }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
