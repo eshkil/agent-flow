@@ -25,6 +25,7 @@ function issueRoutes(labels, comments = []) {
     [`DELETE /repos/${R}/issues/12/labels/ai%3Afailed`]: null,
     [`DELETE /repos/${R}/issues/12/labels/needs-human`]: null,
     [`DELETE /repos/${R}/issues/12/labels/ai%3Ain-progress`]: null,
+    [`DELETE /repos/${R}/issues/12/labels/ai%3Alimit`]: null,
     [`POST /repos/${R}/issues/12/labels`]: [],
     [`POST /repos/${R}/issues/12/comments`]: {},
   };
@@ -47,6 +48,9 @@ test('main: новий issue + agent:go → запуск triage, сигнал з
   assert.ok(paths.includes(`DELETE /repos/${R}/issues/12/labels/agent%3Ago`));
   const lock = gh.calls.find(c => c.method === 'POST' && c.path.endsWith('/labels'));
   assert.deepEqual(lock.body, { labels: ['agent:running'] });
+  // Причина минулого збою не має пережити новий запуск.
+  assert.ok(paths.includes(`DELETE /repos/${R}/issues/12/labels/ai%3Afailed`));
+  assert.ok(paths.includes(`DELETE /repos/${R}/issues/12/labels/ai%3Alimit`));
 });
 
 test('main: відправник поза allow-list → коментар, без запуску і без блокування', async () => {
