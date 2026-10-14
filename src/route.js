@@ -7,7 +7,9 @@ const has = (labels, name) => labels.includes(name);
 // Порядок перевірок — як match_order колонок Kando: перший збіг виграє.
 function stageOf(s) {
   const pr = s.pr;
-  if (s.closed || pr?.state === 'merged') return 'done';
+  if (s.closed) return 'done';
+  // Issue відкрите, а його PR змерджено — людина перевідкрила задачу після мерджу.
+  if (pr?.state === 'merged') return 'reopened';
   if (pr?.state === 'open') return has(pr.labels, 'ai:reviewed') ? 'review_done' : 'review';
   if (has(s.labels, 'spec:approved')) return 'spec_approved';
   if (has(s.labels, 'spec:ready')) return 'spec_review';
@@ -43,9 +45,21 @@ function route(s, trigger, { allowedUsers }) {
     ({ action: 'run', stage, skill, mode, issue, pr });
   const refuse = reason => ({ action: 'refuse', stage, reason });
 
-  if (stage === 'done') return { action: 'ignore', stage };
+  if (stage === 'done') {
+    return refuse('Задачу закрито — агентові нема що робити. Щоб доопрацювати, перевідкрий її, опиши зауваження коментарем і постав `agent:rework`.');
+  }
   // Нова задача ще не має результату агента — переробляти нема чого, це той самий тріаж.
   if (stage === 'new') return run('triage', 'first');
+  // Змерджений PR не переробити: доробка — новий PR від базової гілки, де він уже є.
+  if (stage === 'reopened') {
+    if (!s.humanFeedback) {
+      return refuse(`PR #${s.pr.number} уже змерджено. Опиши коментарем, що не так, і постав \`agent:rework\` — агент відкриє новий PR із доробкою.`);
+    }
+    const skill = has(s.labels, 'type:bug') ? 'bug-agent'
+      : has(s.labels, 'spec:approved') ? 'implement' : null;
+    if (!skill) return refuse('Доробку після мерджу робить реалізація за схваленою спекою, а `spec:approved` на задачі немає. Постав його або познач задачу `type:bug`.');
+    return { ...run(skill, 'rework'), pr: null, mergedPr: s.pr.number };
+  }
   if (trigger === 'rework' && !s.humanFeedback) return refuse(NO_FEEDBACK);
 
   switch (stage) {

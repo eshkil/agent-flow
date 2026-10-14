@@ -65,7 +65,9 @@ async function run({ event, env, gh, setOutput }) {
     const d = await gh.graphql(PR_ISSUES, { owner, name, number });
     linkedIssue = d.repository.pullRequest.closingIssuesReferences.nodes[0]?.number ?? null;
   }
-  const lockNumbers = [...new Set([number, state.pr?.number, linkedIssue].filter(Boolean))];
+  // Змерджений PR уже не змінюється — блокувати його нема сенсу.
+  const lockPr = state.pr?.state === 'merged' ? null : state.pr?.number;
+  const lockNumbers = [...new Set([number, lockPr, linkedIssue].filter(Boolean))];
   const running = state.labels.includes('agent:running')
     || state.pr?.labels.includes('agent:running')
     || (linkedIssue && (await labelsOf(gh, repo, linkedIssue)).includes('agent:running'));
@@ -75,7 +77,6 @@ async function run({ event, env, gh, setOutput }) {
   }
 
   const decision = route(state, trigger, { allowedUsers });
-  if (decision.action === 'ignore') return stop();
   if (decision.action === 'refuse') {
     await comment(gh, repo, number, decision.reason);
     return stop();

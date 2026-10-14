@@ -146,3 +146,28 @@ test('main: «агент уже працює» підказує, що робит
   const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
   assert.match(c.body.body, /зніми лейбл `agent:running` вручну/);
 });
+
+test('main: issue перевідкрито після мерджу PR + agent:rework → implement, змерджений PR не блокується', async () => {
+  const routes = issueRoutes(['ai:triaged', 'spec:ready', 'spec:approved', 'type:feature'], [
+    { user: { login: 'eshkil-agent[bot]' }, body: 'Реалізацію відкрито: #109.\n\n<sub>🤖 Автоматична імплементація</sub>', created_at: '2026-10-14T12:30:55Z' },
+    { user: { login: 'eshkil' }, body: 'схвалено, але картка не зелена.', created_at: '2026-10-14T15:34:10Z' },
+  ]);
+  Object.assign(routes, {
+    GRAPHQL: { repository: { issue: { closedByPullRequestsReferences: { nodes: [{ number: 109, state: 'MERGED', updatedAt: '2026-10-14T15:27:23Z' }] } } } },
+    [`GET /repos/${R}/pulls/109`]: { number: 109, state: 'closed', merged: true, draft: false, mergeable: null, head: { sha: 'm1' }, labels: [] },
+    [`GET /repos/${R}/pulls/109/reviews?per_page=100`]: [],
+    [`GET /repos/${R}/issues/109/timeline?per_page=100`]: [],
+    [`GET /repos/${R}/commits/m1/check-runs?per_page=100`]: { check_runs: [] },
+    [`GET /repos/${R}/commits/m1/status`]: { state: 'success', statuses: [] },
+    [`GET /repos/${R}/issues/109/comments?per_page=100`]: [],
+    [`GET /repos/${R}/pulls/109/comments?per_page=100`]: [],
+  });
+  const gh = fakeGithub(routes);
+  const { out, setOutput } = capture();
+  await run({ event: event('agent:rework'), env: env(), gh, setOutput });
+  assert.equal(out.action, 'run');
+  assert.equal(out.skill, 'implement');
+  assert.equal(out.mode, 'rework');
+  assert.equal(out.lock_numbers, '12');
+  assert.match(out.prompt, /перевідкрито після мерджу PR #109/);
+});

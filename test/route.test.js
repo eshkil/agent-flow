@@ -21,7 +21,9 @@ const rework = s => route(s, 'rework', { allowedUsers: ALLOWED });
 
 test('stageOf: порядок визначення етапу', () => {
   assert.equal(stageOf(issue([], { closed: true })), 'done');
-  assert.equal(stageOf(issue([], { pr: openPr({ state: 'merged' }) })), 'done');
+  // Відкритий issue зі змердженим PR — перевідкрито після мерджу, не «готово».
+  assert.equal(stageOf(issue([], { pr: openPr({ state: 'merged' }) })), 'reopened');
+  assert.equal(stageOf(issue([], { closed: true, pr: openPr({ state: 'merged' }) })), 'done');
   assert.equal(stageOf(issue(['spec:approved'], { pr: openPr({ labels: ['ai:reviewed'] }) })), 'review_done');
   assert.equal(stageOf(issue(['spec:approved'], { pr: openPr() })), 'review');
   assert.equal(stageOf(issue(['ai:triaged', 'spec:ready', 'spec:approved'])), 'spec_approved');
@@ -99,9 +101,41 @@ test('Ревʼю зроблено: rework → pr-fix', () => {
   assert.equal(rework(issue([], { pr: readyPr(), humanFeedback: true })).skill, 'pr-fix');
 });
 
-test('Готово: ігнор', () => {
-  assert.equal(go(issue([], { closed: true })).action, 'ignore');
-  assert.equal(rework(issue([], { pr: openPr({ state: 'merged' }) })).action, 'ignore');
+test('Готово: відмова з поясненням, як доопрацювати', () => {
+  const r = go(issue([], { closed: true }));
+  assert.equal(r.action, 'refuse');
+  assert.match(r.reason, /закрит/);
+  assert.match(r.reason, /перевідкрий/);
+});
+
+const reopened = (labels, over = {}) =>
+  issue(['ai:triaged', 'spec:ready', 'spec:approved', ...labels], { pr: openPr({ number: 109, state: 'merged' }), ...over });
+
+test('Перевідкрито після мерджу: фіча → implement у режимі rework, новим PR', () => {
+  const expected = { action: 'run', stage: 'reopened', skill: 'implement', mode: 'rework', issue: 12, pr: null, mergedPr: 109 };
+  assert.deepEqual(rework(reopened(['type:feature'], { humanFeedback: true })), expected);
+  assert.deepEqual(go(reopened(['type:feature'], { humanFeedback: true })), expected);
+});
+
+test('Перевідкрито після мерджу: баг → bug-agent у режимі rework', () => {
+  const r = rework(issue(['ai:triaged', 'type:bug'], { pr: openPr({ number: 109, state: 'merged' }), humanFeedback: true }));
+  assert.equal(r.skill, 'bug-agent');
+  assert.equal(r.mode, 'rework');
+  assert.equal(r.mergedPr, 109);
+});
+
+test('Перевідкрито після мерджу без зауважень → відмова з проханням описати, що не так', () => {
+  for (const r of [go(reopened(['type:feature'])), rework(reopened(['type:feature']))]) {
+    assert.equal(r.action, 'refuse');
+    assert.match(r.reason, /#109/);
+    assert.match(r.reason, /agent:rework/);
+  }
+});
+
+test('Перевідкрито після мерджу: фіча без схваленої спеки → відмова', () => {
+  const r = rework(issue(['ai:triaged', 'type:feature'], { pr: openPr({ number: 109, state: 'merged' }), humanFeedback: true }));
+  assert.equal(r.action, 'refuse');
+  assert.match(r.reason, /spec:approved/);
 });
 
 test('гейт: готовий PR — нічого не бракує', () => {
