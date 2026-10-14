@@ -36,3 +36,15 @@ test('промпт попереджає про неінтерактивний з
   assert.match(p, /ScheduleWakeup/);
   assert.match(p, /запуш/);
 });
+
+test('доробка після мерджу: новий PR від базової гілки, у змерджений не пушити', () => {
+  const p = buildPrompt({ ...base, trigger: 'rework', decision: { skill: 'implement', mode: 'rework', issue: 12, pr: null, mergedPr: 109 } });
+  assert.doesNotMatch(p, /PR=/);
+  assert.match(p, /перевідкрито після мерджу PR #109/);
+  assert.match(p, /новий PR/);
+});
+
+test('без змердженого PR промпт не згадує доробку після мерджу', () => {
+  const p = buildPrompt({ ...base, decision: { skill: 'implement', mode: 'first', issue: 12, pr: null } });
+  assert.doesNotMatch(p, /після мерджу/);
+});

@@ -2,7 +2,7 @@
 // за ним вони знають, що це явна команда людини, а не самоініціатива агента.
 
 function buildPrompt({ repo, decision, sender, trigger, signalAt, runUrl }) {
-  const { skill, mode, issue, pr } = decision;
+  const { skill, mode, issue, pr, mergedPr } = decision;
   const vars = [`REPO=${repo}`];
   if (issue) vars.push(`ISSUE=${issue}`);
   if (pr) vars.push(`PR=${pr}`);
@@ -20,6 +20,7 @@ function buildPrompt({ repo, decision, sender, trigger, signalAt, runUrl }) {
     '- Лейбли `agent:*` не чіпай — ними керує диспетчер.',
     '- Запуск неінтерактивний: сесія закінчується, щойно ти завершиш хід, і ніхто тебе не розбудить. Не запускай агентів у фоні (`run_in_background`), не став `ScheduleWakeup`, `/loop`, `Monitor` і не «чекай на результати» — усе роби синхронно в цьому ході. Перед завершенням запуш коміти й опублікуй результат (PR / коментар), інакше робота пропаде разом із робочою текою runner-а.',
     `- ${modeText}`,
+    ...(mergedPr ? [`- Задачу перевідкрито після мерджу PR #${mergedPr}: його зміни вже в базовій гілці. Зауваження виправляй у новій гілці від свіжої базової й відкривай новий PR; у гілку #${mergedPr} не пуш і його не перевідкривай. В описі нового PR послайся на #${mergedPr}.`] : []),
     `- Журнал запуску: ${runUrl}`,
   ].join('\n');
 }
