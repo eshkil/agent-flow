@@ -45,6 +45,8 @@ jobs:
           agent_user_id: ${{ vars.AGENT_USER_ID }}
           allowed_users: ${{ vars.AGENT_ALLOWED_USERS }}
           dry_run: ${{ vars.AGENT_DRY_RUN }}
+          # Модель Claude; без змінної AGENT_MODEL — за замовчуванням Claude Code.
+          model: ${{ vars.AGENT_MODEL }}
           # Стан ліміту Claude для Kando (бейдж на дошці) — розкоментуй і задай
           # змінну AGENT_STATUS_URL та секрет AGENT_STATUS_SECRET:
           # status_url: ${{ vars.AGENT_STATUS_URL }}

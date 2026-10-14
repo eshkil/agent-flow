@@ -33,7 +33,9 @@
 2. Секрети: `AGENT_APP_ID`, `AGENT_APP_PRIVATE_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`.
 3. Змінні: `AGENT_LOGIN`, `AGENT_USER_ID`; опційно `AGENT_ALLOWED_USERS`
    (через кому; порожньо — власник репо), `AGENT_RUNS_ON` (за замовчуванням
-   `ubuntu-latest`), `AGENT_DRY_RUN=1` на час перевірки.
+   `ubuntu-latest`), `AGENT_DRY_RUN=1` на час перевірки, `AGENT_MODEL` — модель Claude
+   (`claude-opus-5-5`, `opus`, …; порожньо — модель Claude Code за замовчуванням
+   для підписки, зараз це Sonnet).
 4. Скопіюй `templates/agent.yml` у `.github/workflows/agent.yml` і заповни блок STACK.
    Job `review-reset` у шаблоні знімає `ai:reviewed` на кожен пуш у PR — не видаляй його:
    на ньому тримається гейт мерджу.
