@@ -175,3 +175,37 @@ test('main: issue перевідкрито після мерджу PR + agent:re
   assert.equal(out.lock_numbers, '12');
   assert.match(out.prompt, /перевідкрито після мерджу PR #109/);
 });
+
+test('main: модель для скіла з AGENT_MODEL — у вихід model', async () => {
+  const gh = fakeGithub(issueRoutes([]));
+  const { out, setOutput } = capture();
+  await run({ event: event('agent:go'), env: env({ AGENT_MODEL: 'opus, triage=sonnet' }), gh, setOutput });
+  assert.equal(out.action, 'run');
+  assert.equal(out.model, 'sonnet');
+});
+
+test('main: без AGENT_MODEL вихід model порожній', async () => {
+  const gh = fakeGithub(issueRoutes([]));
+  const { out, setOutput } = capture();
+  await run({ event: event('agent:go'), env: env(), gh, setOutput });
+  assert.equal(out.model, '');
+});
+
+test('main: dry run називає модель', async () => {
+  const gh = fakeGithub(issueRoutes([]));
+  const { setOutput } = capture();
+  await run({ event: event('agent:go'), env: env({ AGENT_DRY_RUN: '1', AGENT_MODEL: 'opus, triage=sonnet' }), gh, setOutput });
+  const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
+  assert.match(c.body.body, /модель `sonnet`/);
+});
+
+test('main: помилка в AGENT_MODEL → коментар, без запуску і без блокування', async () => {
+  const gh = fakeGithub(issueRoutes([]));
+  const { out, setOutput } = capture();
+  await run({ event: event('agent:go'), env: env({ AGENT_MODEL: 'opus, pr_review=sonnet' }), gh, setOutput });
+  assert.equal(out.action, 'stop');
+  assert.equal(out.lock_numbers, undefined);
+  const c = gh.calls.find(x => x.method === 'POST' && x.path.endsWith('/comments'));
+  assert.match(c.body.body, /AGENT_MODEL/);
+  assert.match(c.body.body, /pr_review/);
+});

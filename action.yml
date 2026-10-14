@@ -34,7 +34,7 @@ inputs:
     required: false
     default: UTC
   model:
-    description: 'Модель Claude, напр. claude-opus-5-5 або псевдонім opus; порожньо — модель Claude Code за замовчуванням для підписки'
+    description: 'Модель Claude: одна для всіх скілів (claude-opus-5-5, opus) або дефолт + перевизначення «скіл=модель» через кому (claude-opus-5-5, triage=claude-sonnet-5-5); порожньо — модель Claude Code за замовчуванням для підписки'
     required: false
     default: ''
 outputs:
@@ -55,6 +55,7 @@ runs:
         AGENT_LOGIN: ${{ inputs.agent_login }}
         AGENT_ALLOWED_USERS: ${{ inputs.allowed_users }}
         AGENT_DRY_RUN: ${{ inputs.dry_run }}
+        AGENT_MODEL: ${{ inputs.model }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
     - id: claude
@@ -72,7 +73,7 @@ runs:
           --plugin-dir ${{ github.action_path }}/plugin
           --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite,Skill
           --disallowedTools ScheduleWakeup,CronCreate,Monitor,RemoteTrigger
-          ${{ inputs.model && format('--model {0}', inputs.model) || '' }}
+          ${{ steps.route.outputs.model && format('--model {0}', steps.route.outputs.model) || '' }}
 
     - id: finish
       if: always() && (steps.route.outputs.lock_numbers != '' || steps.route.outcome == 'failure')

@@ -34,14 +34,28 @@
 3. Змінні: `AGENT_LOGIN`, `AGENT_USER_ID`; опційно `AGENT_ALLOWED_USERS`
    (через кому; порожньо — власник репо), `AGENT_RUNS_ON` (за замовчуванням
    `ubuntu-latest`), `AGENT_DRY_RUN=1` на час перевірки, `AGENT_MODEL` — модель Claude
-   (`claude-opus-5-5`, `opus`, …; порожньо — модель Claude Code за замовчуванням
-   для підписки, зараз це Sonnet).
+   (див. «Модель Claude»).
 4. Скопіюй `templates/agent.yml` у `.github/workflows/agent.yml` і заповни блок STACK.
    Job `review-reset` у шаблоні знімає `ai:reviewed` на кожен пуш у PR — не видаляй його:
    на ньому тримається гейт мерджу.
 
 Завис `agent:running` (у журналі Actions немає активного запуску) — зніми лейбл
 вручну й постав сигнал знову.
+
+## Модель Claude
+
+`AGENT_MODEL` — одна модель для всіх скілів (`claude-opus-5-5`, `opus`, …) або модель
+за замовчуванням плюс перевизначення `скіл=модель` через кому:
+
+```
+claude-opus-5-5, triage=claude-sonnet-5-5, pr-review=claude-sonnet-5-5
+```
+
+Скіли: `triage`, `feature-spec`, `implement`, `bug-agent`, `pr-review`, `pr-fix`, `merge`.
+Без моделі за замовчуванням решта скілів іде на модель Claude Code за замовчуванням для
+підписки (зараз Sonnet); порожня змінна — так для всіх. Помилка у змінній (невідомий скіл,
+дві моделі за замовчуванням) — диспетчер пише коментар і не запускає Claude. Dry run
+називає модель, яку взяв би.
 
 ## Стан ліміту Claude
 
