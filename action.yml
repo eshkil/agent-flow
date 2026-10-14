@@ -33,6 +33,10 @@ inputs:
     description: Часова зона для часу відновлення в коментарі ai:failed, напр. Europe/Kyiv
     required: false
     default: UTC
+  model:
+    description: 'Модель Claude, напр. claude-opus-5-5 або псевдонім opus; порожньо — модель Claude Code за замовчуванням для підписки'
+    required: false
+    default: ''
 outputs:
   limit_reached:
     description: "'true', якщо запуск зупинився на ліміті Claude"
@@ -68,6 +72,7 @@ runs:
           --plugin-dir ${{ github.action_path }}/plugin
           --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite,Skill
           --disallowedTools ScheduleWakeup,CronCreate,Monitor,RemoteTrigger
+          ${{ inputs.model && format('--model {0}', inputs.model) || '' }}
 
     - id: finish
       if: always() && (steps.route.outputs.lock_numbers != '' || steps.route.outcome == 'failure')
