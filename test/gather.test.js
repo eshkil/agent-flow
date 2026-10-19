@@ -138,6 +138,38 @@ test('gather: власний run агента не блокує checks (ownRunId
   assert.equal(s.pr.checks, 'pending');
 });
 
+const actionsRun = (name, status, startedAt, runId) => ({
+  name, status, conclusion: status === 'completed' ? 'success' : null, started_at: startedAt,
+  app: { slug: 'github-actions' },
+  details_url: `https://github.com/eshkil/kando-board/actions/runs/${runId}/job/1`,
+});
+
+test('gather: чужий run агента (той самий job) не блокує checks', async () => {
+  // Завислий у черзі run агента з іншого сигналу — не CI (kando-board#130).
+  const runs = [{ status: 'completed', conclusion: 'success' }, actionsRun('agent', 'queued', '2026-10-19T15:49:00Z', 555)];
+  let s = await gather({ ...ctx, ownRunId: 777, ownJob: 'agent' }, fakeGithub(withPr({ checkRuns: runs })));
+  assert.equal(s.pr.checks, 'success');
+  // Однойменний check іншого застосунку — це вже чужий CI.
+  const foreign = [{ ...runs[1], app: { slug: 'circleci' } }];
+  s = await gather({ ...ctx, ownRunId: 777, ownJob: 'agent' }, fakeGithub(withPr({ checkRuns: foreign })));
+  assert.equal(s.pr.checks, 'pending');
+});
+
+test('gather: review-reset, запущений до ai:reviewed, не блокує checks', async () => {
+  // Пуш о 15:41 → review-reset завис у queued; AI-рев'ю цього коміту — о 15:52.
+  const timeline = [{ event: 'labeled', label: { name: 'ai:reviewed' }, created_at: '2026-10-19T15:52:59Z' }];
+  const stale = [actionsRun('review-reset', 'queued', '2026-10-19T15:41:05Z', 556)];
+  let s = await gather({ ...ctx, ownRunId: 777 }, fakeGithub(withPr({ prLabels: ['ai:reviewed'], timeline, checkRuns: stale })));
+  assert.equal(s.pr.checks, 'none');
+  // Пуш після рев'ю: review-reset ще не зняв ai:reviewed — гейт мусить чекати.
+  const fresh = [actionsRun('review-reset', 'queued', '2026-10-19T15:55:00Z', 557)];
+  s = await gather({ ...ctx, ownRunId: 777 }, fakeGithub(withPr({ prLabels: ['ai:reviewed'], timeline, checkRuns: fresh })));
+  assert.equal(s.pr.checks, 'pending');
+  // Без ai:reviewed review-reset лишається звичайною перевіркою.
+  s = await gather({ ...ctx, ownRunId: 777 }, fakeGithub(withPr({ checkRuns: stale })));
+  assert.equal(s.pr.checks, 'pending');
+});
+
 test('gather: відгук людини в обговоренні PR теж рахується', async () => {
   const routes = withPr();
   routes[`GET /repos/${R}/issues/12/comments?per_page=100`] = [comment(AGENT, 'спека', '2026-10-01T10:00:00Z')];

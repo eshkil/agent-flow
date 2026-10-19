@@ -57,7 +57,7 @@ async function run({ event, env, gh, setOutput }) {
   }
 
   const state = await gather({
-    repo, kind, number, agentLogin: env.AGENT_LOGIN, allowedUsers, ownRunId: env.GITHUB_RUN_ID,
+    repo, kind, number, agentLogin: env.AGENT_LOGIN, allowedUsers, ownRunId: env.GITHUB_RUN_ID, ownJob: env.GITHUB_JOB,
   }, gh);
 
   // Задача — це issue і його PR разом: блокування перевіряємо й ставимо на обох.
