@@ -42,6 +42,38 @@
 Завис `agent:running` (у журналі Actions немає активного запуску) — зніми лейбл
 вручну й постав сигнал знову.
 
+## Режим C (Kando)
+
+Режим, у якому запуск агента ініціює сам Kando, а не лейбл у GitHub: Kando викликає
+workflow `kando-agent.yml` через `workflow_dispatch`, а раннер `eshkil/agent-flow/runner@v2`
+міняє OIDC-токен Actions на токен GitHub App (обмежений одним репо) і промпт, запускає
+Claude Code з плагіном скілів, раз на хвилину шле heartbeat (він же оновлює токен) і в кінці
+доповідає Kando підсумок (успіх, збій, ліміт Claude, завислий `ai:in-progress`).
+Лейблами й коментарями після запуску керує Kando. Режим A (`eshkil/agent-flow@v1`) не змінено.
+
+Підключення:
+
+1. Скопіюй `templates/kando-agent.yml` у `.github/workflows/kando-agent.yml` на default-гілці
+   (Kando приймає токени лише з неї). Назву файлу не змінюй.
+2. Секрет репо: `CLAUDE_CODE_OAUTH_TOKEN` (`claude setup-token`) або `ANTHROPIC_API_KEY`.
+   Секретів GitHub App у репо не потрібно: токен видає Kando.
+3. Середовище агента опиши в `.kando/agent.yml` у корені репо:
+
+| Ключ | Що робить |
+|---|---|
+| `node` | версія Node для `actions/setup-node` (напр. `'22'`) |
+| `java` | версія JDK Temurin для `actions/setup-java` (напр. `'21'`) |
+| `python` | версія Python для `actions/setup-python` (напр. `'3.12'`) |
+| `setup` | список shell-команд, кожна окремим `bash -e` після checkout (напр. `npm ci`) |
+
+Kando читає цей файл і передає в workflow як input `env`. Версії беруться з файлу, а не з
+workflow, щоб їх міняв автор репо без правок CI.
+
+Усередині запуску `gh` і `git` автоматично користуються актуальним токеном (його оновлює
+heartbeat): `bin/gh` підставляє токен з файлу, `bin/git-credential-kando` віддає його лише
+для `github.com`. Скіли, що лишають PR як draft, пишуть причину в тіло PR маркером
+`<!-- kando:draft-reason: … -->`.
+
 ## Модель Claude
 
 `AGENT_MODEL` — одна модель для всіх скілів (`claude-opus-5-5`, `opus`, …) або модель

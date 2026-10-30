@@ -1,0 +1,36 @@
+// Крок start: міняє OIDC-токен Actions на токен GitHub і промпт від Kando.
+// Токен лягає у файл (0600), а не у вихід кроку: його оновлює heartbeat,
+// а bin/gh і git-credential-kando читають актуальний.
+
+const fs = require('node:fs');
+const { fileOutput } = require('../output');
+const { paths, oidcToken, call, writeToken } = require('./kando');
+
+async function start({ env, fetchImpl = fetch, setOutput = () => {}, sleep, retryMs, log = console }) {
+  const oidc = await oidcToken(env, fetchImpl);
+  const res = await call(env.KANDO_URL, `/api/agent/runs/${env.KANDO_RUN_ID}/start`, {}, { oidc, fetchImpl, sleep, retryMs });
+  // Маскуємо до будь-якого іншого виводу: токен не має потрапити в журнал.
+  log.log(`::add-mask::${res.github_token}`);
+  writeToken(paths(env).token, res.github_token);
+  fs.rmSync(paths(env).stop, { force: true });
+
+  setOutput('prompt', res.prompt);
+  setOutput('model', res.model || '');
+  setOutput('skill', res.skill || '');
+  setOutput('mode', res.mode || '');
+  setOutput('bot_login', res.bot?.login || '');
+  setOutput('bot_id', res.bot?.id ?? '');
+  setOutput('issue', res.issue ?? '');
+  setOutput('pr', res.pr ?? '');
+  log.log(`Kando: запуск ${env.KANDO_RUN_ID}, скіл ${res.skill}/${res.mode}, токен до ${res.expires_at}`);
+  return res;
+}
+
+if (require.main === module) {
+  start({ env: process.env, setOutput: fileOutput(process.env.GITHUB_OUTPUT) }).catch(e => {
+    console.error(`::error::${e.message}`);
+    process.exit(1);
+  });
+}
+
+module.exports = { start };

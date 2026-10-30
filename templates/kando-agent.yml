@@ -1,0 +1,41 @@
+# Режим C: запуск агента з дошки Kando. Kando сам викликає цей workflow
+# (workflow_dispatch) і передає номер запуску, раннер та середовище.
+# Секрети репо: CLAUDE_CODE_OAUTH_TOKEN або ANTHROPIC_API_KEY.
+# Середовище задає .kando/agent.yml у репо (node, java, python, setup).
+name: Kando agent
+run-name: kando-run-${{ inputs.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id: { required: true, type: string }
+      runs_on: { required: true, type: string }
+      env: { required: true, type: string }
+
+# id-token потрібен для обміну OIDC на токен GitHub у Kando.
+permissions: { id-token: write, contents: read }
+
+jobs:
+  agent:
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    timeout-minutes: 90
+    steps:
+      # Токен у git не лишаємо: далі його видає git-credential-kando.
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - if: fromJSON(inputs.env).node
+        uses: actions/setup-node@v7
+        with: { node-version: '${{ fromJSON(inputs.env).node }}' }
+      - if: fromJSON(inputs.env).java
+        uses: actions/setup-java@v6
+        with: { distribution: temurin, java-version: '${{ fromJSON(inputs.env).java }}' }
+      - if: fromJSON(inputs.env).python
+        uses: actions/setup-python@v6
+        with: { python-version: '${{ fromJSON(inputs.env).python }}' }
+      - uses: eshkil/agent-flow/runner@v2
+        with:
+          kando_url: https://kando-board.pp.ua
+          run_id: ${{ inputs.run_id }}
+          env: ${{ inputs.env }}
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}

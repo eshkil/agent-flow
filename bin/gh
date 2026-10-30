@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Обгортка над gh для агента: підставляє актуальний токен з файлу (його оновлює
+# heartbeat), бо токен у змінній середовища за годину протух би.
+set -eu
+
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+
+# Справжній gh — перший у PATH поза каталогом обгортки (інакше нескінченна рекурсія).
+find_real_gh() {
+  local IFS=: dir resolved
+  for dir in $PATH; do
+    [ -n "$dir" ] || continue
+    resolved="$(cd "$dir" 2>/dev/null && pwd -P)" || continue
+    [ "$resolved" != "$self_dir" ] || continue
+    if [ -f "$dir/gh" ] && [ -x "$dir/gh" ]; then
+      printf '%s\n' "$dir/gh"
+      return 0
+    fi
+  done
+  return 1
+}
+
+real="$(find_real_gh)" || { echo "gh: справжній gh не знайдено в PATH" >&2; exit 127; }
+token_file="${KANDO_TOKEN_FILE:-${KANDO_DIR:-${RUNNER_TEMP:-/tmp}/kando}/token}"
+if [ -r "$token_file" ]; then
+  GH_TOKEN="$(cat "$token_file")"
+  export GH_TOKEN
+fi
+exec "$real" "$@"
