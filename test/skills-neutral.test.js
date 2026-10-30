@@ -9,7 +9,10 @@ const SKILLS = path.join(__dirname, '..', 'plugin', 'skills');
 const names = fs.readdirSync(SKILLS).filter(n => fs.existsSync(path.join(SKILLS, n, 'SKILL.md'))).sort();
 const skill = name => fs.readFileSync(path.join(SKILLS, name, 'SKILL.md'), 'utf8');
 // Без блоку «Пріоритет проєкту» (він сам перелічує маркери): перевіряємо тіло скіла.
-const body = name => skill(name).replace(/## Пріоритет проєкту[\s\S]*?\n(?=## )/, '');
+// Блок — заголовок і список маркованих пунктів (з відступами продовження) до першого порожнього рядка.
+const BLOCK = /## Пріоритет проєкту\n\n(?:- [^\n]*\n(?:  [^\n]*\n)*)+/;
+const body = name => skill(name).replace(BLOCK, '');
+const blockOf = name => skill(name).match(BLOCK)[0];
 
 test('є всі сім скілів', () => {
   assert.deepEqual(names, ['bug-agent', 'feature-spec', 'implement', 'merge', 'pr-fix', 'pr-review', 'triage']);
@@ -22,12 +25,23 @@ for (const name of names) {
     assert.ok(i > 0, 'блок є');
     const h1 = s.search(/^# /m);
     assert.ok(h1 >= 0 && h1 < i && s.slice(h1, i).split('\n').length <= 4, 'блок іде одразу під заголовком скіла');
-    const block = s.slice(i, s.indexOf('\n## ', i + 1));
+    const block = blockOf(name);
     assert.match(block, /`CLAUDE\.md` \/ `AGENTS\.md`/);
     assert.match(block, /пріоритет над цим скілом/);
     assert.match(block, /мова тікета/);
     assert.match(block, /`docs\/evidence\/`/);
     assert.match(block, /дослівно, незалежно від мови/);
+    // Виняток для гейтів безпеки: CLAUDE.md їх не знімає.
+    assert.match(block, /не скасовує\s+запобіжників скіла/);
+    assert.match(block, /гейт мерджу/);
+    assert.match(block, /`ai:reviewed` на поточному коміті/);
+    assert.match(block, /Approve людини на поточному\s+sha/);
+    assert.match(block, /«Схвалення в Kando: …»/);
+    assert.match(block, /зелений CI/);
+    assert.match(block, /вимоги надати докази/);
+    assert.match(block, /службові маркери/);
+    assert.match(block, /заборону чіпати файли поза завданням/);
+    assert.match(block, /`CLAUDE\.md` цього не знімає/);
   });
 
   test(`${name}: немає специфіки репо автора`, () => {
@@ -71,6 +85,11 @@ test('triage: тріаж-коментар і «Потрібно уточнити
   const s = body('triage');
   assert.ok(s.includes('## 🔍 Тріаж'));
   assert.ok(s.includes('❓ Потрібно уточнити'));
+});
+
+test('блок «Пріоритет проєкту» однаковий у всіх скілах', () => {
+  const first = blockOf(names[0]);
+  for (const n of names) assert.equal(blockOf(n), first, `блок у ${n} відрізняється`);
 });
 
 test('скіли, що вміють лишати draft, згадують маркер draft-reason; npm не єдиний варіант', () => {

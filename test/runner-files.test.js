@@ -118,6 +118,80 @@ test('writeFiles: ключ __proto__ — звичайний шлях (тут в�
   assert.equal(fs.readFileSync(path.join(root, '__proto__'), 'utf8'), 'p');
 });
 
+test('writeFiles: symlink усередині root на .git → помилка, .git не змінено', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.git'));
+  fs.writeFileSync(path.join(root, '.git', 'config'), 'orig');
+  fs.symlinkSync(path.join(root, '.git'), path.join(root, 'alias'));
+  assert.throws(() => writeFiles(secretJson({ 'alias/config': b64('evil') }), root), /\.git/);
+  assert.throws(() => writeFiles(secretJson({ 'alias/new/x': b64('evil') }), root), /\.git/);
+  assert.equal(fs.readFileSync(path.join(root, '.git', 'config'), 'utf8'), 'orig');
+});
+
+test('writeFiles: ціль — наявна тека → помилка до першого запису', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, 'a'));
+  assert.throws(() => writeFiles(secretJson({ ok: b64('1'), a: b64('2') }), root), /files: "a": на місці файлу тека/);
+  assert.ok(!fs.existsSync(path.join(root, 'ok')));
+});
+
+test('writeFiles: «a» і «a/b» разом → помилка до першого запису', () => {
+  const root = tmp();
+  assert.throws(() => writeFiles(secretJson({ ok: b64('1'), a: b64('2'), 'a/b': b64('3') }), root), /files: "a\/b": .*інший файл/);
+  assert.deepEqual(tree(root), []);
+});
+
+test('writeFiles: збій запису → «files: не вдалося записати <шлях>» без вмісту й системного тексту', () => {
+  const root = tmp();
+  const content = b64('TOPSECRET');
+  fs.mkdirSync(path.join(root, 'd'));
+  fs.chmodSync(path.join(root, 'd'), 0o500);
+  try {
+    if (process.getuid && process.getuid() === 0) return;   // root обходить права теки
+    assert.throws(() => writeFiles(secretJson({ 'd/f': content }), root), e => {
+      assert.equal(e.message, 'files: не вдалося записати "d/f"');
+      return true;
+    });
+  } finally { fs.chmodSync(path.join(root, 'd'), 0o700); }
+});
+
+test('writeFiles: «..env» і «a/..b» — звичайні імена, лише «..» і «.» точні сегменти заборонені', () => {
+  const root = tmp();
+  assert.deepEqual(writeFiles(secretJson({ '..env': b64('1'), 'a/..b': b64('2') }), root).sort(), ['..env', 'a/..b']);
+  assert.equal(fs.readFileSync(path.join(root, '..env'), 'utf8'), '1');
+  assert.throws(() => writeFiles(secretJson({ '..': b64('1') }), root), /files: /);
+});
+
+test('writeFiles: шляхи дописуються в .git/info/exclude без дублів, наявні рядки лишаються', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.git', 'info'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.git', 'info', 'exclude'), '# мій рядок\n/.env');
+  const secret = secretJson({ '.env': b64('1'), 'app/google-services.json': b64('2'), 'we*ird[1]': b64('3') });
+  writeFiles(secret, root);
+  writeFiles(secret, root);   // повторно: дублів не буде
+  const lines = fs.readFileSync(path.join(root, '.git', 'info', 'exclude'), 'utf8').split('\n');
+  assert.deepEqual(lines, ['# мій рядок', '/.env', '/app/google-services.json', '/we\\*ird\\[1\\]', '']);
+});
+
+test('writeFiles: .git/info немає — створюється; .git немає чи це файл (worktree) — мовчки пропускає', () => {
+  const root = tmp();
+  fs.mkdirSync(path.join(root, '.git'));
+  writeFiles(secretJson({ '.env': b64('1') }), root);
+  assert.equal(fs.readFileSync(path.join(root, '.git', 'info', 'exclude'), 'utf8'), '/.env\n');
+  const wt = tmp();
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: /somewhere');
+  assert.deepEqual(writeFiles(secretJson({ '.env': b64('1') }), wt), ['.env']);
+  assert.equal(fs.readFileSync(path.join(wt, '.git'), 'utf8'), 'gitdir: /somewhere');
+});
+
+test('writeFiles: записаний файл справді ігнорується git-ом', () => {
+  const root = tmp();
+  const git = args => spawnSync('git', args, { cwd: root, encoding: 'utf8' });
+  if (git(['init', '-q']).status !== 0) return;
+  writeFiles(secretJson({ '.env': b64('1'), 'dir/sp ace ': b64('2') }), root);
+  assert.equal(git(['status', '--porcelain', '-uall']).stdout, '');
+});
+
 // ─── як скрипт кроку ─────────────────────────────────────────────────────────
 function runScript(env) {
   return spawnSync(process.execPath, [FILES_JS], { env: { PATH: process.env.PATH, ...env }, encoding: 'utf8' });

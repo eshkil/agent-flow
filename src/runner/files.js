@@ -19,11 +19,23 @@ function badPath(p) {
 
 const inside = (root, p) => {
   const rel = path.relative(root, p);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
 };
 
+// Перший сегмент відносно root — .git (без урахування регістру): symlink усередині
+// репо не мусить дати записати файл у службову теку git.
+const inGitDir = (root, p) => {
+  const first = path.relative(root, p).split(path.sep)[0];
+  return first.toLowerCase() === '.git';
+};
+
+function isLink(p) {
+  try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; }
+}
+
 // Найглибший наявний предок шляху: через symlink у репо mkdir -p створив би теки
-// поза робочою копією, тож реальний шлях предка теж мусить лишатися всередині root.
+// поза робочою копією, тож реальний шлях предка теж мусить лишатися всередині root
+// і не потрапляти в .git.
 function checkTarget(realRoot, target) {
   let dir = path.dirname(target);
   while (!fs.existsSync(dir) && !isLink(dir)) dir = path.dirname(dir);
@@ -31,11 +43,34 @@ function checkTarget(realRoot, target) {
   try { real = fs.realpathSync(dir); } catch { throw new Error('шлях проходить через symlink без цілі'); }
   if (!fs.statSync(real).isDirectory()) throw new Error('шлях проходить через файл');
   if (real !== realRoot && !inside(realRoot, real)) throw new Error('шлях виходить за робочу копію');
+  if (real !== realRoot && inGitDir(realRoot, real)) throw new Error('шлях веде в .git');
   if (isLink(target)) throw new Error('на місці файлу symlink');
+  if (fs.existsSync(target) && fs.statSync(target).isDirectory()) throw new Error('на місці файлу тека');
 }
 
-function isLink(p) {
-  try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; }
+// Шаблон .git/info/exclude для точного шляху від кореня: екрануємо знаки glob-у, а
+// останній кінцевий пробіл — інакше git його відкидає. Початок `/` знімає проблему з `#`/`!`.
+const excludeLine = rel => '/' + rel.replace(/[\\*?[\]]/g, '\\$&').replace(/ $/, '\\ ');
+
+// Записаним секретам не місце в PR: агент комітить із цієї копії, а .env може не бути
+// в .gitignore. Дописуємо шляхи в локальний .git/info/exclude (репо не змінюється).
+// Немає .git (або це не тека, як у worktree) — мовчки пропускаємо.
+function excludeFromGit(root, rels) {
+  const gitDir = path.join(root, '.git');
+  let st;
+  try { st = fs.lstatSync(gitDir); } catch { return; }
+  if (!st.isDirectory()) return;
+  const file = path.join(gitDir, 'info', 'exclude');
+  if (isLink(file)) return;
+  let text = '';
+  try { text = fs.readFileSync(file, 'utf8'); } catch { /* файлу ще немає */ }
+  const have = new Set(text.split('\n'));
+  const add = rels.map(excludeLine).filter(l => !have.has(l));
+  if (!add.length) return;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text + (text && !text.endsWith('\n') ? '\n' : '') + add.join('\n') + '\n');
+  } catch { throw new Error('files: не вдалося оновити .git/info/exclude'); }
 }
 
 // → масив записаних шляхів. Спершу перевіряє ВСІ шляхи, і лише потім пише: поганий
@@ -56,13 +91,28 @@ function writeFiles(json, root) {
     try { checkTarget(realRoot, target); } catch (e) { throw new Error(`files: ${JSON.stringify(rel)}: ${e.message}`); }
     plan.push({ rel, target, data: Buffer.from(b64, 'base64') });
   }
+  // `a` і `a/b` разом: перший стане файлом, другому потрібна тека.
+  const rels = new Set(plan.map(f => f.rel));
+  for (const { rel } of plan) {
+    const parts = rel.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      if (rels.has(parts.slice(0, i).join('/'))) throw new Error(`files: ${JSON.stringify(rel)}: шлях проходить через інший файл секрету`);
+    }
+  }
 
+  excludeFromGit(realRoot, plan.map(f => f.rel));
   for (const { target, data, rel } of plan) {
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    // Повторно після mkdir: між перевіркою й записом нічого не мало змінитися.
-    try { checkTarget(realRoot, target); } catch (e) { throw new Error(`files: ${JSON.stringify(rel)}: ${e.message}`); }
-    fs.writeFileSync(target, data, { mode: 0o600 });
-    fs.chmodSync(target, 0o600);   // файл міг уже існувати з іншими правами
+    try {
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      // Повторно після mkdir: між перевіркою й записом нічого не мало змінитися.
+      try { checkTarget(realRoot, target); } catch (e) { throw new Error(`files: ${JSON.stringify(rel)}: ${e.message}`); }
+      // Права ДО запису: наявний файл міг бути 0644, а writeFile mode йому не міняє.
+      if (fs.existsSync(target)) fs.chmodSync(target, 0o600);
+      fs.writeFileSync(target, data, { mode: 0o600 });
+    } catch (e) {
+      if (e.message.startsWith('files: ')) throw e;
+      throw new Error(`files: не вдалося записати ${JSON.stringify(rel)}`);
+    }
   }
   return plan.map(f => f.rel);
 }
