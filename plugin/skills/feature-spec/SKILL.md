@@ -106,26 +106,41 @@ echo "$REPO ($BASE) $VIS @ $ROOT"
 Імена файлів: `docs/evidence/spec-$ISSUE-<екран>[-mobile].png` (якщо `CLAUDE.md` задає іншу теку
 доказів — підстав її замість `docs/evidence/` і в командах нижче).
 
-Далі поклади PNG у гілку, щоб raw-посилання працювало. Гілка **тільки з картинками**,
-без коду і без PR:
+Далі поклади PNG у службову гілку `kando-attachments` — туди ж Kando кладе картинки з issues.
+Окремої гілки на кожну спеку **не створюй**: усі макети живуть у теці `specs/$ISSUE/` цієї гілки.
+Пиши файли через Contents API, а не `git push`: так кілька агентів, що працюють паралельно,
+не конфліктують, а робоча копія лишається недоторканою.
 
 ```bash
-git fetch origin "$BASE"
-git worktree add /tmp/mockup-$ISSUE -b ai/$ISSUE-spec-mockup "origin/$BASE"
-mkdir -p /tmp/mockup-$ISSUE/docs/evidence
-cp docs/evidence/spec-$ISSUE-*.png /tmp/mockup-$ISSUE/docs/evidence/
-git -C /tmp/mockup-$ISSUE add docs/evidence/
-git -C /tmp/mockup-$ISSUE commit -m "Макет до специфікації #$ISSUE"
-git -C /tmp/mockup-$ISSUE push -u origin ai/$ISSUE-spec-mockup
-git worktree remove /tmp/mockup-$ISSUE
+B=kando-attachments
+# Гілки ще нема — створи orphan-гілку з README, як це робить Kando (без коду проєкту).
+if ! gh api "repos/$REPO/git/ref/heads/$B" >/dev/null 2>&1; then
+  TREE=$(printf '%s' '{"tree":[{"path":"README.md","mode":"100644","type":"blob","content":"# Kando Attachments\n\nЦя службова гілка зберігає вкладення (картинки) до карток і коментарів Kando Board.\n"}]}' \
+    | gh api "repos/$REPO/git/trees" --input - -q .sha)
+  COMMIT=$(printf '{"message":"Ініціалізація гілки вкладень Kando","tree":"%s","parents":[]}' "$TREE" \
+    | gh api "repos/$REPO/git/commits" --input - -q .sha)
+  printf '{"ref":"refs/heads/%s","sha":"%s"}' "$B" "$COMMIT" \
+    | gh api "repos/$REPO/git/refs" --input - >/dev/null 2>&1 || true   # 422 — гілку щойно створив хтось інший
+fi
+# Кожен запуск — свій префікс часу: переписана спека не підмінить картинки в старому коментарі.
+STAMP=$(date -u +%Y%m%d%H%M%S)
+for f in docs/evidence/spec-$ISSUE-*.png; do
+  P="specs/$ISSUE/$STAMP-$(basename "$f")"
+  for try in 1 2 3; do   # 409/422 — паралельний коміт у ту саму гілку: повтор
+    { printf '{"message":"Макет до специфікації #%s","branch":"%s","content":"' "$ISSUE" "$B"
+      base64 < "$f" | tr -d '\n'; printf '"}'; } \
+      | gh api -X PUT "repos/$REPO/contents/$P" --input - >/dev/null && { echo "$P"; break; }
+    sleep 3
+  done
+done
 ```
 
-Worktree — щоб не тягнути за собою незакомічені зміни з робочої гілки.
+Скрипт друкує шляхи, що лягли в гілку; файл, якого в списку нема, не завантажився — так і напиши.
 
-Посилання в коментарі (`IMG_URL`) — за видимістю репозиторію (`$VIS`); підстав реальне значення
-`$REPO`, у коментарі змінні не розкриваються:
-- **PUBLIC** → `https://raw.githubusercontent.com/$REPO/ai/$ISSUE-spec-mockup/docs/evidence/<файл>.png`
-- **PRIVATE / INTERNAL** → `https://github.com/$REPO/blob/ai/$ISSUE-spec-mockup/docs/evidence/<файл>.png?raw=true`
+Посилання в коментарі (`IMG_URL`) — за видимістю репозиторію (`$VIS`); підстав реальні значення
+`$REPO`, `$ISSUE` і шлях з виводу скрипта, у коментарі змінні не розкриваються:
+- **PUBLIC** → `https://raw.githubusercontent.com/$REPO/kando-attachments/specs/$ISSUE/<STAMP>-<файл>.png`
+- **PRIVATE / INTERNAL** → `https://github.com/$REPO/blob/kando-attachments/specs/$ISSUE/<STAMP>-<файл>.png?raw=true`
 
 `raw.githubusercontent.com` у приватному репо без токена не відкривається (биті картинки),
 а `blob/...?raw=true` працює для всіх, хто має доступ до репозиторію.
@@ -215,14 +230,15 @@ gh issue edit $ISSUE -R "$REPO" \
 код чи `CLAUDE.md`. Псевдографіка замість скріншота. Малювати макет у графічному редакторі
 замість браузера. Працювати з репозиторієм, відмінним від поточного або явно названого.
 
-Гілка `ai/$ISSUE-spec-mockup` з самими лише PNG — єдине, що цьому скілу дозволено пушити.
+PNG у `kando-attachments/specs/$ISSUE/` — єдине, що цьому скілу дозволено писати в репозиторій.
+Нових гілок не створюй, нічого не пуш (крім одноразового створення самої `kando-attachments`, якщо її нема).
 
 ---
 
 # Додаток: докази і GitHub
 
 - Скріншот доповнює тест, не замінює. Не вийшов — напиши чому; вигаданий результат знищує довіру.
-- Показувати скріншоти лише через посилання на гілку; артефакти GitHub Actions не годяться.
+- Показувати скріншоти лише через посилання на `kando-attachments`; артефакти GitHub Actions не годяться.
 - Спершу: `gh auth status && gh repo view "$REPO" --json name`. Немає доступу — скажи прямо.
 - Перед висновками про гілки: `git fetch origin --prune && git log --oneline -5 "origin/$BASE"`.
 - Довгі коментарі — через `--body-file`, не `--body`.

@@ -80,7 +80,7 @@ gh pr view $PR -R "$REPO" --json state,isDraft,mergeable,headRefName,headRefOid,
 gh pr merge $PR -R "$REPO" --squash --delete-branch
 ```
 
-Гілки `ai/<N>-spec-mockup` **не видаляй**: на них посилаються картинки в коментарі зі специфікацією.
+Гілки `ai/<N>-spec-mockup` (старі специфікації) і `kando-attachments` **не видаляй**: на них посилаються картинки в коментарях і специфікаціях.
 
 ## Крок 3. Задача
 
