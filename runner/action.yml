@@ -19,6 +19,10 @@ inputs:
     description: ANTHROPIC_API_KEY; або claude_code_oauth_token
     required: false
     default: ''
+  files:
+    description: 'Секрет KANDO_FILES: JSON {"<шлях>": "<вміст у base64>"} — файли поза git (.env, google-services.json), які пишуться в робочу копію перед setup'
+    required: false
+    default: ''
 runs:
   using: composite
   steps:
@@ -46,6 +50,14 @@ runs:
       env:
         KANDO_URL: ${{ inputs.kando_url }}
         KANDO_RUN_ID: ${{ inputs.run_id }}
+
+    # Файли поза git — до setup, щоб його команди їх бачили. Значення секрету йде
+    # лише через env і ніде не друкується: у лог потрапляють самі шляхи.
+    - id: files
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/files.js"
+      env:
+        KANDO_FILES_JSON: ${{ inputs.files }}
 
     - id: setup
       shell: bash

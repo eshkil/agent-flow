@@ -39,3 +39,4 @@ jobs:
           env: ${{ inputs.env }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          files: ${{ secrets.KANDO_FILES }}
