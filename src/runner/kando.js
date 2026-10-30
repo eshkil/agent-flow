@@ -8,6 +8,22 @@ const AUDIENCE = 'kando-agent';
 const ATTEMPTS = 3;
 const RETRY_MS = 5000;
 
+// Паузи між спробами /finish: від 5 с, удвічі, не більше хвилини, разом рівно
+// 10 хв. Підсумок — єдиний звіт про роботу: рестарт чи деплой Kando не має
+// перетворити готовий запуск на «обірваний».
+const FINISH_TOTAL_MS = 10 * 60e3;
+const FINISH_DELAYS = (() => {
+  const out = [];
+  let next = RETRY_MS, total = 0;
+  while (total < FINISH_TOTAL_MS) {
+    const d = Math.min(next, 60e3, FINISH_TOTAL_MS - total);
+    out.push(d);
+    total += d;
+    next *= 2;
+  }
+  return out;
+})();
+
 const sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // Усі файли раннера лежать в одному каталозі; його ж читають bin/gh і credential helper.
@@ -34,14 +50,18 @@ class KandoError extends Error {
 }
 
 // 5xx і мережа — повторюємо (Kando міг рестартувати), 4xx — відповідь остаточна.
-async function call(kandoUrl, route, body, { oidc, fetchImpl = fetch, sleep = sleepMs, retryMs = RETRY_MS, attempts = ATTEMPTS }) {
+// delays — паузи між спробами (інакше attempts спроб через retryMs). oidc — рядок
+// або функція: довгим повторам потрібен свіжий токен на кожну спробу.
+async function call(kandoUrl, route, body, { oidc, fetchImpl = fetch, sleep = sleepMs, retryMs = RETRY_MS, attempts = ATTEMPTS, delays }) {
   const url = `${String(kandoUrl).replace(/\/+$/, '')}${route}`;
+  const waits = delays || Array(Math.max(attempts - 1, 0)).fill(retryMs);
   let last;
-  for (let i = 1; i <= attempts; i++) {
+  for (let i = 0; i <= waits.length; i++) {
     try {
+      const bearer = typeof oidc === 'function' ? await oidc() : oidc;
       const res = await fetchImpl(url, {
         method: 'POST',
-        headers: { Authorization: `Bearer ${oidc}`, 'Content-Type': 'application/json' },
+        headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),
       });
       const data = await res.json().catch(() => ({}));
@@ -52,7 +72,7 @@ async function call(kandoUrl, route, body, { oidc, fetchImpl = fetch, sleep = sl
       if (e instanceof KandoError && e.status < 500) throw e;
       last = e instanceof KandoError ? e : new KandoError(0, `${route}: ${e.message}`);
     }
-    if (i < attempts) await sleep(retryMs);
+    if (i < waits.length) await sleep(waits[i]);
   }
   throw last;
 }
@@ -89,4 +109,4 @@ function gitConfigEnv({ env = {}, helper, startToken }) {
   return out;
 }
 
-module.exports = { gitConfigEnv, AUDIENCE, ATTEMPTS, RETRY_MS, paths, oidcToken, call, writeToken, KandoError };
+module.exports = { gitConfigEnv, AUDIENCE, ATTEMPTS, RETRY_MS, FINISH_DELAYS, paths, oidcToken, call, writeToken, KandoError };

@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { oidcToken, call, paths, gitConfigEnv } = require('../src/runner/kando');
+const { oidcToken, call, paths, gitConfigEnv, FINISH_DELAYS } = require('../src/runner/kando');
 const { start } = require('../src/runner/start');
 const { beat, run: heartbeatLoop } = require('../src/runner/heartbeat');
 const { finish, isStuck, outcomeOf } = require('../src/runner/finish');
@@ -341,6 +341,44 @@ test('finish: 409 від Kando піднімається як KandoError зі с�
   await assert.rejects(finish({ env: baseEnv(tmp(), { CLAUDE_OUTCOME: 'success' }), fetchImpl: f, log: silent }), e => e.status === 409);
 });
 
+test('finish: 5xx і мережа повторюються з наростаючою паузою; кожна спроба — зі свіжим OIDC', async () => {
+  const env = baseEnv(tmp(), { CLAUDE_OUTCOME: 'success' });
+  let n = 0, oidcN = 0;
+  const sleeps = [], auths = [];
+  const f = async (url, opts) => {
+    if (String(url).startsWith('https://actions.test/')) return json(200, { value: `oidc-${++oidcN}` });
+    n++;
+    auths.push(opts.headers.Authorization);
+    if (n === 1) throw new Error('ECONNREFUSED');   // Kando рестартує
+    if (n < 7) return json(502, { error: 'GitHub не відповів' });
+    return json(200, { status: 'succeeded' });
+  };
+  const { res } = await finish({ env, fetchImpl: f, sleep: async ms => sleeps.push(ms), log: silent });
+  assert.equal(res.status, 'succeeded');
+  assert.equal(n, 7, 'більше за 3 спроби');
+  assert.deepEqual(sleeps, FINISH_DELAYS.slice(0, 6));
+  for (let i = 1; i < sleeps.length; i++) assert.ok(sleeps[i] >= sleeps[i - 1], 'пауза не зменшується');
+  // OIDC-токен Actions живе ~5 хв: за 10 хв повторів старий отримав би 401.
+  assert.equal(new Set(auths).size, 7);
+});
+
+test('finish: Kando недоступний увесь час → здається приблизно за 10 хв; 4xx не повторює', async () => {
+  const env = baseEnv(tmp(), { CLAUDE_OUTCOME: 'success' });
+  let n = 0;
+  const sleeps = [];
+  const down = async url => (String(url).startsWith('https://actions.test/') ? json(200, { value: 'j' }) : (n++, json(503, {})));
+  await assert.rejects(finish({ env, fetchImpl: down, sleep: async ms => sleeps.push(ms), log: silent }), e => e.status === 503);
+  const total = sleeps.reduce((a, b) => a + b, 0);
+  assert.ok(total >= 9 * 60e3 && total <= 10 * 60e3, `разом ${total} мс`);
+  assert.equal(n, sleeps.length + 1);
+  assert.ok(Math.max(...sleeps) <= 60e3, 'пауза не більша за хвилину');
+
+  n = 0;
+  const gone = async url => (String(url).startsWith('https://actions.test/') ? json(200, { value: 'j' }) : (n++, json(409, { error: 'Запуск уже завершено' })));
+  await assert.rejects(finish({ env, fetchImpl: gone, sleep: noSleep, log: silent }), e => e.status === 409);
+  assert.equal(n, 1);
+});
+
 // ─── setup ───────────────────────────────────────────────────────────────────
 test('setupCommands: масив, один рядок, порожнє й некоректний JSON', () => {
   assert.deepEqual(setupCommands('{"node":"22","setup":["npm ci"," ","npm run build"]}'), ['npm ci', 'npm run build']);
@@ -427,6 +465,10 @@ test('git-credential-kando: чужий хост, store/erase і відсутні
     const r = cred('get', `protocol=https\nhost=${host}\n\n`, env);
     assert.equal(r.stdout, '', host);
     assert.equal(r.status, 0);
+  }
+  // Токен — лише по https: http-адреса github.com (чи без протоколу) віддала б його відкритим текстом.
+  for (const input of ['protocol=http\nhost=github.com\n\n', 'host=github.com\n\n', 'protocol=ssh\nhost=github.com\n\n']) {
+    assert.equal(cred('get', input, env).stdout, '', input);
   }
   assert.equal(cred('store', 'protocol=https\nhost=github.com\npassword=x\n\n', env).stdout, '');
   assert.equal(cred('erase', 'protocol=https\nhost=github.com\n\n', env).stdout, '');

@@ -3,7 +3,7 @@
 
 const fs = require('node:fs');
 const { detectLimit, readMessages } = require('../limit');
-const { paths, oidcToken, call, KandoError } = require('./kando');
+const { paths, oidcToken, call, KandoError, FINISH_DELAYS } = require('./kando');
 
 // steps.claude.outcome: success | failure | cancelled | skipped.
 // skipped (збій setup тощо) для Kando — той самий збій.
@@ -30,7 +30,7 @@ async function isStuck({ env, numbers, fetchImpl = fetch, log = console }) {
   return false;
 }
 
-async function finish({ env, fetchImpl = fetch, sleep, retryMs, log = console }) {
+async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, log = console }) {
   const p = paths(env);
   // Спершу зупиняємо heartbeat: після /finish він отримав би лише 409.
   fs.mkdirSync(p.dir, { recursive: true, mode: 0o700 });
@@ -42,8 +42,15 @@ async function finish({ env, fetchImpl = fetch, sleep, retryMs, log = console })
   const stuck = await isStuck({ env, numbers, fetchImpl, log });
 
   const body = { outcome, limit: { limited: limit.limited, until: limit.until ? limit.until.toISOString() : null }, stuck };
-  const oidc = await oidcToken(env, fetchImpl);
-  const res = await call(env.KANDO_URL, `/api/agent/runs/${env.KANDO_RUN_ID}/finish`, body, { oidc, fetchImpl, sleep, retryMs });
+  // Перший токен — одразу: без змінних Actions повторювати нема чого. Далі кожна
+  // спроба бере новий (OIDC-токен живе кілька хвилин, а повтори — до 10 хв).
+  let first = await oidcToken(env, fetchImpl);
+  const oidc = async () => {
+    const t = first ?? await oidcToken(env, fetchImpl);
+    first = null;
+    return t;
+  };
+  const res = await call(env.KANDO_URL, `/api/agent/runs/${env.KANDO_RUN_ID}/finish`, body, { oidc, fetchImpl, sleep, delays });
   log.log(`Kando: підсумок ${outcome}${stuck ? ' (завис ai:in-progress)' : ''}${limit.limited ? ' (ліміт Claude)' : ''} → ${res.status}`);
   return { body, res };
 }
