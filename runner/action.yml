@@ -1,0 +1,88 @@
+name: agent-flow runner
+description: Виконавець запусків Kando (режим C) — OIDC-обмін на токен GitHub і промпт, Claude Code, heartbeat, підсумок
+inputs:
+  kando_url:
+    description: Адреса Kando, напр. https://kando-board.pp.ua
+    required: true
+  run_id:
+    description: Номер запуску в Kando (input workflow_dispatch)
+    required: true
+  env:
+    description: 'JSON середовища з Kando: {node, java, python, setup[]}; з нього береться лише setup (node/java/python ставить workflow)'
+    required: false
+    default: '{}'
+  claude_code_oauth_token:
+    description: CLAUDE_CODE_OAUTH_TOKEN (claude setup-token); або anthropic_api_key
+    required: false
+    default: ''
+  anthropic_api_key:
+    description: ANTHROPIC_API_KEY; або claude_code_oauth_token
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    # Усі значення inputs ідуть через env, а не підстановкою в скрипт: інакше їх
+    # вміст виконувався б як shell.
+    - id: start
+      shell: bash
+      run: |
+        # start.js сам додає bin/ у PATH і git-конфіг у GITHUB_ENV (лише на цей job):
+        # ~/.gitconfig раннера не чіпаємо.
+        node "$GITHUB_ACTION_PATH/../src/runner/start.js"
+      env:
+        KANDO_URL: ${{ inputs.kando_url }}
+        KANDO_RUN_ID: ${{ inputs.run_id }}
+
+    # Фоновий процес переживає крок: журнал у файл, stdin/stdout відʼєднані, інакше
+    # крок висне в очікуванні закриття потоків. Зупиняє його finish (stop-файл).
+    # Стартує ДО setup і б'є одразу: довгий setup не має сплисти повз сторожа Kando.
+    - id: heartbeat
+      shell: bash
+      run: |
+        mkdir -p "$RUNNER_TEMP/kando"
+        nohup node "$GITHUB_ACTION_PATH/../src/runner/heartbeat.js" >> "$RUNNER_TEMP/kando/heartbeat.log" 2>&1 < /dev/null &
+        disown
+      env:
+        KANDO_URL: ${{ inputs.kando_url }}
+        KANDO_RUN_ID: ${{ inputs.run_id }}
+
+    - id: setup
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/setup.js"
+      env:
+        KANDO_ENV: ${{ inputs.env }}
+
+    - id: claude
+      uses: anthropics/claude-code-action@v1
+      with:
+        prompt: ${{ steps.start.outputs.prompt }}
+        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
+        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        github_token: ${{ steps.start.outputs.github_token }}
+        bot_name: ${{ steps.start.outputs.bot_login }}
+        # Kando запускає workflow токеном App, тож github.actor — бот; без цього
+        # claude-code-action відмовляє «non-human actor».
+        allowed_bots: ${{ steps.start.outputs.bot_login }}
+        bot_id: ${{ steps.start.outputs.bot_id }}
+        claude_args: >-
+          --plugin-dir ${{ github.action_path }}/../plugin
+          --allowedTools Bash,Read,Write,Edit,Glob,Grep,WebFetch,TodoWrite,Skill
+          --disallowedTools ScheduleWakeup,CronCreate,Monitor,RemoteTrigger
+          ${{ steps.start.outputs.model && format('--model {0}', steps.start.outputs.model) || '' }}
+
+    # Без успішного start Kando про запуск нічого не знає — звітувати нема чого.
+    - id: finish
+      if: always() && steps.start.outcome == 'success'
+      shell: bash
+      run: |
+        log="$RUNNER_TEMP/kando/heartbeat.log"
+        if [ -s "$log" ]; then echo "::group::heartbeat"; cat "$log"; echo "::endgroup::"; fi
+        node "$GITHUB_ACTION_PATH/../src/runner/finish.js"
+      env:
+        KANDO_URL: ${{ inputs.kando_url }}
+        KANDO_RUN_ID: ${{ inputs.run_id }}
+        CLAUDE_OUTCOME: ${{ steps.claude.outcome }}
+        EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        ISSUE: ${{ steps.start.outputs.issue }}
+        PR: ${{ steps.start.outputs.pr }}
