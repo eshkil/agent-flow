@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const { oidcToken, call, paths } = require('../src/runner/kando');
+const { oidcToken, call, paths, gitConfigEnv } = require('../src/runner/kando');
 const { start } = require('../src/runner/start');
 const { beat, run: heartbeatLoop } = require('../src/runner/heartbeat');
 const { finish, isStuck, outcomeOf } = require('../src/runner/finish');
@@ -86,7 +86,7 @@ test('call: мережева помилка повторюється, успіх
 // ─── start ───────────────────────────────────────────────────────────────────
 const startResponse = { github_token: 'ghs_first', expires_at: '2030-01-01T00:00:00Z', prompt: 'Рядок 1\nРядок 2', model: 'claude-opus-5-5', skill: 'implement', mode: 'first', bot: { login: 'kando[bot]', id: 77 }, issue: 5, pr: null };
 
-test('start: токен у файлі з правами 0600, вихід prompt, маска токена, без токена у виходах', async () => {
+test('start: токен у файлі з правами 0600, вихід prompt, маска токена, токен лише в github_token', async () => {
   const dir = tmp();
   const env = baseEnv(dir);
   const f = fakeFetch({ routes: { '/api/agent/runs/42/start': json(200, startResponse) } });
@@ -102,8 +102,10 @@ test('start: токен у файлі з правами 0600, вихід prompt,
   assert.equal(out.bot_id, 77);
   assert.equal(out.issue, 5);
   assert.equal(out.pr, '');
-  assert.ok(!Object.values(out).some(v => String(v).includes('ghs_first')));
-  assert.ok(lines.includes('::add-mask::ghs_first'));
+  // Токен старту віддаємо виходом (для claude-code-action) — лише в github_token і під маскою.
+  assert.equal(out.github_token, 'ghs_first');
+  assert.ok(!Object.entries(out).some(([k, v]) => k !== 'github_token' && String(v).includes('ghs_first')));
+  assert.equal(lines[0], '::add-mask::ghs_first');
   assert.ok(!lines.filter(l => !l.startsWith('::add-mask::')).some(l => l.includes('ghs_first')));
   assert.equal(f.calls.find(c => c.url.endsWith('/start')).opts.headers.Authorization, 'Bearer oidc-jwt');
 });
@@ -122,6 +124,71 @@ test('start: прибирає stop-файл попереднього запус�
   fs.writeFileSync(paths(env).stop, '');
   await start({ env, fetchImpl: fakeFetch({ routes: { '/start': json(200, startResponse) } }), log: silent });
   assert.ok(!fs.existsSync(paths(env).stop));
+});
+
+test('start: PATH отримує bin/, git-конфіг іде у setEnv (а не в глобальний ~/.gitconfig)', async () => {
+  const dir = tmp();
+  const added = [], envSet = {};
+  await start({
+    env: baseEnv(dir), fetchImpl: fakeFetch({ routes: { '/start': json(200, startResponse) } }), log: silent,
+    binDir: '/opt/af/bin', addPath: d => added.push(d), setEnv: (k, v) => { envSet[k] = v; },
+  });
+  assert.deepEqual(added, ['/opt/af/bin']);
+  assert.equal(envSet.GIT_CONFIG_COUNT, '3');
+  assert.equal(envSet.GIT_CONFIG_VALUE_1, '/opt/af/bin/git-credential-kando');
+});
+
+// ─── git-конфіг на job ───────────────────────────────────────────────────────
+test('gitConfigEnv: скидання helper-ів, наш helper і insteadOf для URL з токеном старту', () => {
+  const e = gitConfigEnv({ env: {}, helper: '/b/git-credential-kando', startToken: 'ghs_start' });
+  assert.deepEqual(e, {
+    GIT_CONFIG_COUNT: '3',
+    GIT_CONFIG_KEY_0: 'credential.helper', GIT_CONFIG_VALUE_0: '',
+    GIT_CONFIG_KEY_1: 'credential.helper', GIT_CONFIG_VALUE_1: '/b/git-credential-kando',
+    GIT_CONFIG_KEY_2: 'url.https://github.com/.insteadOf', GIT_CONFIG_VALUE_2: 'https://x-access-token:ghs_start@github.com/',
+  });
+});
+
+test('gitConfigEnv: дописує після наявного GIT_CONFIG_COUNT, не затираючи чужі записи', () => {
+  const e = gitConfigEnv({ env: { GIT_CONFIG_COUNT: '2' }, helper: '/h', startToken: 't' });
+  assert.equal(e.GIT_CONFIG_COUNT, '5');
+  assert.ok(!('GIT_CONFIG_KEY_0' in e) && !('GIT_CONFIG_KEY_1' in e));
+  assert.equal(e.GIT_CONFIG_KEY_2, 'credential.helper');
+  assert.equal(e.GIT_CONFIG_KEY_4, 'url.https://github.com/.insteadOf');
+});
+
+test('gitConfigEnv у справжньому git: origin з токеном старту переписується, helper віддає свіжий токен', () => {
+  const root = tmp();
+  const home = path.join(root, 'home');           // ізольований HOME: перевіряємо ще й що глобальний конфіг не вдарено
+  fs.mkdirSync(home);
+  const token = path.join(root, 'token');
+  fs.writeFileSync(token, 'ghs_fresh');
+  const e = gitConfigEnv({ env: {}, helper: path.join(BIN, 'git-credential-kando'), startToken: 'ghs_start' });
+  const env = { PATH: process.env.PATH, HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), KANDO_TOKEN_FILE: token, ...e };
+  const git = (...a) => spawnSync('git', a, { encoding: 'utf8', env, cwd: root });
+  git('init', '-q');
+  git('remote', 'add', 'origin', 'https://x-access-token:ghs_start@github.com/acme/app.git');
+  // git remote get-url показує вже переписаний URL — без токена старту.
+  assert.equal(git('remote', 'get-url', 'origin').stdout.trim(), 'https://github.com/acme/app.git');
+  const c = spawnSync('git', ['credential', 'fill'], { input: 'protocol=https\nhost=github.com\n\n', encoding: 'utf8', env, cwd: root });
+  assert.match(c.stdout, /password=ghs_fresh/);
+  assert.ok(!fs.existsSync(path.join(home, '.gitconfig')));
+});
+
+// ─── runner/action.yml ───────────────────────────────────────────────────────
+const actionYml = fs.readFileSync(path.join(__dirname, '..', 'runner', 'action.yml'), 'utf8');
+
+test('action.yml: claude-code-action отримує allowed_bots = бот-логін Kando', () => {
+  assert.match(actionYml, /^\s+allowed_bots: \$\{\{ steps\.start\.outputs\.bot_login \}\}$/m);
+});
+
+test('action.yml: ніяких git config --global/--system, heartbeat стартує до setup і claude', () => {
+  assert.doesNotMatch(actionYml, /git config\s+(--global|--system)/);
+  const at = id => actionYml.indexOf(`- id: ${id}\n`);
+  assert.ok(at('start') > 0 && at('start') < at('heartbeat'));
+  assert.ok(at('heartbeat') < at('setup'));
+  assert.ok(at('setup') < at('claude'));
+  assert.match(actionYml, /github_token: \$\{\{ steps\.start\.outputs\.github_token \}\}/);
 });
 
 // ─── heartbeat ───────────────────────────────────────────────────────────────
@@ -167,6 +234,17 @@ test('heartbeat: 409 від Kando → stop', async () => {
   assert.equal(await beat({ env: baseEnv(tmp()), fetchImpl: f, sleep: noSleep, log: silent }), 'stop');
 });
 
+test('heartbeat: перший удар одразу, ще до першої паузи (setup довший за 5 хв не вб\'є запуск)', async () => {
+  const dir = tmp();
+  const env = baseEnv(dir);
+  fs.mkdirSync(paths(env).dir, { recursive: true });
+  const order = [];
+  const f = fakeFetch({ routes: { '/heartbeat': () => { order.push('beat'); return json(200, { github_token: 'ghs_x' }); } } });
+  const sleep = async () => { order.push('sleep'); fs.writeFileSync(paths(env).stop, ''); };
+  await heartbeatLoop({ env, fetchImpl: f, sleep, log: silent });
+  assert.deepEqual(order, ['beat', 'sleep']);
+});
+
 test('heartbeat: цикл зупиняється за stop-файлом, на 409 і за стелею часу', async () => {
   const dir = tmp();
   const env = baseEnv(dir);
@@ -176,7 +254,7 @@ test('heartbeat: цикл зупиняється за stop-файлом, на 40
 
   // stop-файл з'являється під час другої паузи
   let ticks = 0;
-  const sleep = async () => { if (++ticks === 3) fs.writeFileSync(paths(env).stop, ''); };
+  const sleep = async () => { if (++ticks === 2) fs.writeFileSync(paths(env).stop, ''); };
   assert.equal(await heartbeatLoop({ env, fetchImpl: f, sleep, log: silent }), 'stopped');
   assert.equal(beats, 2);
   fs.rmSync(paths(env).stop);

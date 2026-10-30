@@ -66,4 +66,27 @@ function writeToken(file, token) {
   fs.renameSync(tmp, file);
 }
 
-module.exports = { AUDIENCE, ATTEMPTS, RETRY_MS, paths, oidcToken, call, writeToken, KandoError };
+// Конфіг git лише на цей job — через GIT_CONFIG_COUNT/KEY_n/VALUE_n у $GITHUB_ENV.
+// У ~/.gitconfig раннера (на Mac він живе у справжнього користувача) не пишемо нічого.
+//  1. Порожній credential.helper скидає helper-и системного/глобального конфігу
+//     (osxkeychain), далі наш helper віддає свіжий токен з файлу.
+//  2. claude-code-action переписує origin на https://x-access-token:<токен старту>@github.com/…,
+//     тож git ніколи не питав би helper і після ~години пуші падали б зі старим токеном.
+//     insteadOf прибирає токен з URL, і git іде до helper-а.
+function gitConfigEnv({ env = {}, helper, startToken }) {
+  const entries = [
+    ['credential.helper', ''],
+    ['credential.helper', helper],
+    ['url.https://github.com/.insteadOf', `https://x-access-token:${startToken}@github.com/`],
+  ];
+  const base = Number.parseInt(env.GIT_CONFIG_COUNT, 10);
+  const from = Number.isInteger(base) && base > 0 ? base : 0;
+  const out = { GIT_CONFIG_COUNT: String(from + entries.length) };
+  entries.forEach(([key, value], i) => {
+    out[`GIT_CONFIG_KEY_${from + i}`] = key;
+    out[`GIT_CONFIG_VALUE_${from + i}`] = value;
+  });
+  return out;
+}
+
+module.exports = { gitConfigEnv, AUDIENCE, ATTEMPTS, RETRY_MS, paths, oidcToken, call, writeToken, KandoError };

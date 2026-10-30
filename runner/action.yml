@@ -27,26 +27,16 @@ runs:
     - id: start
       shell: bash
       run: |
+        # start.js сам додає bin/ у PATH і git-конфіг у GITHUB_ENV (лише на цей job):
+        # ~/.gitconfig раннера не чіпаємо.
         node "$GITHUB_ACTION_PATH/../src/runner/start.js"
-        bin="$(cd "$GITHUB_ACTION_PATH/../bin" && pwd)"
-        # Обгортка gh перекриває справжній gh для всіх наступних кроків.
-        echo "$bin" >> "$GITHUB_PATH"
-        # Порожнє значення скидає helper-и системного конфігу (напр. osxkeychain
-        # на self-hosted Mac), інакше вони відповіли б раніше за токен Kando.
-        git config --global --add credential.helper ''
-        git config --global --add credential.helper "$bin/git-credential-kando"
       env:
         KANDO_URL: ${{ inputs.kando_url }}
         KANDO_RUN_ID: ${{ inputs.run_id }}
 
-    - id: setup
-      shell: bash
-      run: node "$GITHUB_ACTION_PATH/../src/runner/setup.js"
-      env:
-        KANDO_ENV: ${{ inputs.env }}
-
     # Фоновий процес переживає крок: журнал у файл, stdin/stdout відʼєднані, інакше
     # крок висне в очікуванні закриття потоків. Зупиняє його finish (stop-файл).
+    # Стартує ДО setup і б'є одразу: довгий setup не має сплисти повз сторожа Kando.
     - id: heartbeat
       shell: bash
       run: |
@@ -57,12 +47,11 @@ runs:
         KANDO_URL: ${{ inputs.kando_url }}
         KANDO_RUN_ID: ${{ inputs.run_id }}
 
-    - id: token
+    - id: setup
       shell: bash
-      run: |
-        t="$(cat "$RUNNER_TEMP/kando/token")"
-        echo "::add-mask::$t"
-        echo "value=$t" >> "$GITHUB_OUTPUT"
+      run: node "$GITHUB_ACTION_PATH/../src/runner/setup.js"
+      env:
+        KANDO_ENV: ${{ inputs.env }}
 
     - id: claude
       uses: anthropics/claude-code-action@v1
@@ -70,8 +59,11 @@ runs:
         prompt: ${{ steps.start.outputs.prompt }}
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
-        github_token: ${{ steps.token.outputs.value }}
+        github_token: ${{ steps.start.outputs.github_token }}
         bot_name: ${{ steps.start.outputs.bot_login }}
+        # Kando запускає workflow токеном App, тож github.actor — бот; без цього
+        # claude-code-action відмовляє «non-human actor».
+        allowed_bots: ${{ steps.start.outputs.bot_login }}
         bot_id: ${{ steps.start.outputs.bot_id }}
         claude_args: >-
           --plugin-dir ${{ github.action_path }}/../plugin

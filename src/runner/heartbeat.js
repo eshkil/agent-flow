@@ -32,11 +32,12 @@ async function beat({ env, fetchImpl = fetch, sleep, retryMs, log = console }) {
 async function run({ env, fetchImpl = fetch, sleep = sleepMs, intervalMs = INTERVAL_MS, maxMs = MAX_MS, now = Date.now, retryMs, log = console }) {
   const { stop } = paths(env);
   const deadline = now() + maxMs;
+  // Перший удар одразу: heartbeat стартує до setup, який може тривати довше за
+  // 5 хв — стільки чекає сторож Kando.
   while (now() < deadline) {
-    await sleep(intervalMs);
     if (fs.existsSync(stop)) return 'stopped';
-    // Повтори всередині call коротші за тік, тож на цьому кроці не затримуємось довго.
     if (await beat({ env, fetchImpl, sleep, retryMs, log }) === 'stop') return 'final';
+    await sleep(intervalMs);
   }
   return 'expired';
 }
