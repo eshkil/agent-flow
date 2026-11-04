@@ -128,10 +128,10 @@ cmd_begin() {
   done
   # Без сервера перебирання не відбулось, а інша сесія досі тримає задачу: код 0 означав би «працюй далі».
   local skip=0
-  [ -z "$takeover" ] || skip=3
-  if ! valid_id "$session"; then echo "Kando: некоректний id сесії, пропускаю."; return $skip; fi
-  if ! valid_number "$number"; then echo "Kando: некоректний номер задачі, пропускаю."; return $skip; fi
-  if ! valid_skill "$skill"; then echo "Kando: некоректна назва скіла, пропускаю."; return $skip; fi
+  local note=; [ -z "$takeover" ] || { skip=3; note=" Перебирання не відбулось."; }
+  if ! valid_id "$session"; then echo "Kando: некоректний id сесії, пропускаю.$note"; return $skip; fi
+  if ! valid_number "$number"; then echo "Kando: некоректний номер задачі, пропускаю.$note"; return $skip; fi
+  if ! valid_skill "$skill"; then echo "Kando: некоректна назва скіла, пропускаю.$note"; return $skip; fi
 
   mkdir -p "$SDIR" 2>/dev/null
   find "$SDIR" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
