@@ -492,6 +492,133 @@ test('post-tool: 409 з іншою втратою стан лишає (рядо�
   });
 });
 
+// ─── begin, на який сервер не відповів ───────────────────────────────────────
+// Та сама сесія щойно закінчила скіл на цій задачі, рядок на сервері skill_done. Сигнал без
+// begin задачу не повертає, тож після збою begin перший сигнал мусить бути begin-ом. Інакше стан
+// мовчки зникне, скіл працюватиме без утримання, а ▶ Агенту запустить другого агента.
+const COLD = { status: 503, body: {} };
+// Сервер, як справжній: перші n запитів — збій, далі сигнал без begin отримує skill_done.
+const coldThenDone = (n = 1) => (r, reqs) => {
+  if (reqs.length <= n) return COLD;
+  return r.body.begin ? HELD : SKILL_DONE;
+};
+
+test('begin без відповіді після skill_done: перший сигнал бере задачу, стан лишається, далі звичайні сигнали', async () => {
+  await withKando(coldThenDone(), async (k) => {
+    const sb = sandbox();
+    const b = await begin(sb, k.url);
+    assert.equal(b.code, 0);
+    assert.ok(fs.existsSync(sb.state()));
+
+    const r = await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(r.stdout, '');
+    assert.deepEqual(k.reqs[1].body, { repo: 'o/r', number: 7, skill: 'implement', begin: true });
+    assert.ok(fs.existsSync(sb.state()), 'стан не зник');
+    assert.ok(!fs.existsSync(sb.state() + '.pending'), 'begin підтверджено');
+
+    sb.setBeat(Math.floor(Date.now() / 1000) - 61);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.deepEqual(k.reqs[2].body, { repo: 'o/r', number: 7, skill: 'implement' });
+  });
+});
+
+test('begin без відповіді: сервер не відповідає й на сигнал → наступний сигнал теж begin', async () => {
+  await withKando(coldThenDone(2), async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(k.reqs[1].body.begin, true);
+    assert.ok(fs.existsSync(sb.state() + '.pending'), '5xx нічого не підтвердив');
+
+    sb.setBeat(Math.floor(Date.now() / 1000) - 61);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(k.reqs[2].body.begin, true);
+    assert.ok(fs.existsSync(sb.state()));
+    assert.ok(!fs.existsSync(sb.state() + '.pending'));
+  });
+});
+
+test('begin без відповіді: перевірка перед пушем теж бере задачу', async () => {
+  await withKando(coldThenDone(), async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs[1].body.begin, true);
+    assert.ok(fs.existsSync(sb.state()));
+    assert.ok(!fs.existsSync(sb.state() + '.pending'));
+  });
+});
+
+test('begin без відповіді: задачу тримає хтось інший → пуш заборонено, позначка лишається', async () => {
+  const handler = (r, reqs) => (reqs.length === 1 ? COLD : LOST('Задачу вже тримає @bob', null));
+  await withKando(handler, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(k.reqs[1].body.begin, true);
+    assert.ok(fs.existsSync(sb.state() + '.pending'), 'задачу не взято');
+  });
+});
+
+test('begin --takeover без відповіді: перебирання не губиться, але діє лише до підтвердження', async () => {
+  await withKando(coldThenDone(), async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url, ['--takeover']);
+    assert.equal(k.reqs[0].body.takeover, true);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.deepEqual(k.reqs[1].body, { repo: 'o/r', number: 7, skill: 'implement', begin: true, takeover: true });
+
+    sb.setBeat(Math.floor(Date.now() / 1000) - 61);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.deepEqual(k.reqs[2].body, { repo: 'o/r', number: 7, skill: 'implement' });
+  });
+});
+
+test('begin без відповіді після роботи над іншою задачею: старі .beat і .warned не глушать перший сигнал', async () => {
+  await withKando(coldThenDone(), async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    sb.setBeat(Math.floor(Date.now() / 1000));
+    fs.writeFileSync(sb.state() + '.warned', '');
+    await begin(sb, k.url);
+    assert.ok(!fs.existsSync(sb.state() + '.warned'));
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(k.reqs.length, 2, 'перший сигнал не чекає 60 с');
+    assert.equal(k.reqs[1].body.begin, true);
+  });
+});
+
+test('успішний повторний begin прибирає позначку: наступний сигнал звичайний', async () => {
+  await withKando((r, reqs) => (reqs.length === 1 ? COLD : HELD), async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    assert.ok(fs.existsSync(sb.state() + '.pending'));
+    await begin(sb, k.url);
+    assert.ok(!fs.existsSync(sb.state() + '.pending'));
+    sb.setBeat(Math.floor(Date.now() / 1000) - 61);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.deepEqual(k.reqs[2].body, { repo: 'o/r', number: 7, skill: 'implement' });
+  });
+});
+
+test('позначка не переживає кінець скіла й відхилений токен', async () => {
+  await withKando((r, reqs) => (reqs.length === 1 ? COLD : { status: 200, body: {} }), async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    await run(sb, k.url, ['end', '--session', SID]);
+    assert.ok(!fs.existsSync(sb.state() + '.pending'));
+  });
+  await withKando((r, reqs) => (reqs.length === 1 ? COLD : { status: 401, body: {} }), async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.ok(!fs.existsSync(sb.state()));
+    assert.ok(!fs.existsSync(sb.state() + '.pending'));
+  });
+});
+
 test('post-tool: сервер не відповідає → порожній stdout, код 0, не довше за 6 с, стан лишається', async () => {
   await withKando('hang', async (k) => {
     const sb = sandbox();

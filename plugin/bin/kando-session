@@ -78,7 +78,7 @@ same_repo() { [ "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | t
 state_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 
 drop_state() { # id
-  rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned"
+  rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned" "$SDIR/$1.pending"
 }
 
 # HTTP-виклик. Токен іде в curl через конфіг на stdin, а не в аргументах
@@ -150,6 +150,7 @@ cmd_begin() {
   api PUT "$session" "" 20 "$body"
   case "$RESP_STATUS" in
     200)
+      rm -f "$SDIR/$session.pending"
       if not_managed; then
         echo "Kando: репозиторій $repo не керується Kando, сесію не позначено."
       else
@@ -167,8 +168,11 @@ cmd_begin() {
     400)
       echo "Kando: запит відхилено (400), сесію не позначено." ;;
     *)
-      # Сервер не відповів або віддав 5xx: працюємо далі, хуки спробують ще.
+      # Сервер не відповів або віддав 5xx: працюємо далі, хуки спробують ще. Сигнал без begin
+      # не повертає задачу після skill_done, тож .pending каже хукам повторити сам begin.
       printf 'repo=%s\nnumber=%s\nskill=%s\n' "$repo" "$number" "$skill" > "$SDIR/$session"
+      rm -f "$SDIR/$session.beat" "$SDIR/$session.warned"
+      printf '%s' "${takeover:+takeover}" > "$SDIR/$session.pending"
       echo "Kando: сервер недоступний ($RESP_STATUS), продовжую без підтвердження."
       ;;
   esac
@@ -214,11 +218,16 @@ hook_same_repo() {
   same_repo "$cur" "$REPO"
 }
 
-# Сигнал без begin. Після нього RESP_STATUS/RESP_BODY заповнені.
+# Сигнал; якщо сервер не відповів на begin, то й він сам. Після нього RESP_STATUS/RESP_BODY заповнені.
 hook_signal() { # timeout
-  api PUT "$SESSION" "" "$1" "$(put_body "$REPO" "$NUMBER" "$SKILL")"
+  local extra=
+  if [ -f "$STATE.pending" ]; then
+    extra=',"begin":true'
+    [ "$(cat "$STATE.pending" 2>/dev/null)" = takeover ] && extra="$extra"',"takeover":true'
+  fi
+  api PUT "$SESSION" "" "$1" "$(put_body "$REPO" "$NUMBER" "$SKILL" "$extra")"
   case "$RESP_STATUS" in
-    200) if not_managed; then drop_state "$SESSION"; else rm -f "$SDIR/$SESSION.warned"; fi ;;
+    200) if not_managed; then drop_state "$SESSION"; else rm -f "$STATE.warned" "$STATE.pending"; fi ;;
     401|403) drop_state "$SESSION" ;;
     # Запізнілий сигнал після кінця скіла: нічого не втрачено, лише прибрати стан.
     409) if printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"skill_done"'; then drop_state "$SESSION"; fi ;;
