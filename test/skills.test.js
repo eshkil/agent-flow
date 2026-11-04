@@ -106,6 +106,15 @@ for (const name of SESSION_SKILLS) {
     assert.match(takeSection, /людина прямо вирішила кинути задачу[^\n]*виконай `end`/);
     assert.match(takeSection, /Сам цього не роби/);
     assert.match(takeSection, /не чіпай лейбли/);
+    // Правило «знімай завжди» не сміє суперечити втраченій задачі: це зрушило б картку під чужим запуском.
+    for (const m of s.matchAll(/^.*`ai:in-progress`.*(?:за будь-якого|\*\*завжди\*\*|\*\*за будь-якого\*\*).*$/gm)) {
+      assert.match(m[0], /крім втраченої задачі/, m[0]);
+    }
+    // Людина без Kando не мусить підтверджувати скрипт, що для неї нічого не робить.
+    const fm = s.slice(0, s.indexOf('\n---', 4));
+    // Виклик у скілі: "${CLAUDE_PLUGIN_ROOT}/bin/kando-session" begin — після імені може бути лапка, а не пробіл.
+    assert.match(fm, /^allowed-tools: .*Bash\(\*\/bin\/kando-session \*\)/m);
+    assert.match(fm, /^allowed-tools: .*Bash\(\*\/bin\/kando-session" \*\)/m);
     // Код 3 каже й про перебирання, яке не вдалось: скіл працює далі лише на результат без коду 3.
     assert.match(takeSection, /Код виходу `3` означає, що задачу вже тримає хтось інший або перебрати її не вдалось/);
     // Кинуту задачу лейбл не тримає, але чужий запуск він не має зрушити: це підтверджує людина.
