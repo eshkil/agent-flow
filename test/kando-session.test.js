@@ -91,6 +91,9 @@ function assertStopText(t) {
   assert.match(t, /нічого не пуш/);
   assert.match(t, /скажи про це людині/);
   assert.match(t, /чекай її рішення/);
+  // Вихід із блокування є, але рішення за людиною.
+  assert.match(t, /Лише якщо людина вирішить кинути задачу/);
+  assert.match(t, /Сам цього не роби/);
   assert.doesNotMatch(t, /знову|заново|begin|перезапуск/i);
 }
 const begin = (sb, url, more = [], opts) =>
@@ -143,6 +146,48 @@ test('begin: 409 → код 3, надруковано message, стану нем
     assert.match(r.stdout, /Задачу тримає @bob у сесії X/);
     assert.equal(k.reqs[0].body.takeover, true);
     assert.ok(!fs.existsSync(sb.state()));
+  });
+});
+
+// ─── --repo: скіл міг узяти задачу з іншого репо, ніж origin ─────────────────
+test('begin: --repo не збігається з origin → код 0, причина, без запитів і стану', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    const r = await begin(sb, k.url, ['--repo', 'other/thing']);
+    assert.equal(r.code, 0);
+    assert.match(r.stdout, /other\/thing/);
+    assert.match(r.stdout, /o\/r/);
+    assert.equal(k.reqs.length, 0);
+    assert.ok(!fs.existsSync(sb.state()));
+  });
+});
+
+test('begin: --repo збігається з origin без урахування регістру → задачу взято', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox({ origin: 'git@github.com:Org/Repo.git' });
+    const r = await begin(sb, k.url, ['--repo', 'org/REPO']);
+    assert.equal(r.code, 0);
+    assert.equal(k.reqs.length, 1);
+    assert.equal(k.reqs[0].body.repo, 'Org/Repo');
+    assert.ok(fs.existsSync(sb.state()));
+  });
+});
+
+test('begin: --repo із порожнім значенням (змінна не збереглась) → за origin', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url, ['--repo', '']);
+    assert.equal(k.reqs[0].body.repo, 'o/r');
+  });
+});
+
+test('begin: --repo зі спецсимволами не ламає вивід', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    const r = await begin(sb, k.url, ['--repo', 'a"b\nc/d']);
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout.trim().split('\n').length, 1);
+    assert.equal(k.reqs.length, 0);
   });
 });
 
@@ -370,17 +415,82 @@ test('post-tool: { managed: false } → стан видалено', async () => 
   });
 });
 
+// Захист зникає разом зі станом, тож Claude має про це сказати людині. Наступні хуки стану вже
+// не бачать, тож попередження одне.
 for (const status of [401, 403]) {
-  test(`post-tool: ${status} → стан видалено`, async () => {
+  test(`post-tool: ${status} → стан видалено, один раз сказано через additionalContext`, async () => {
     await withKando({ status, body: { error: 'x' } }, async (k) => {
       const sb = sandbox();
       sb.writeState();
       const r = await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
-      assert.equal(r.stdout, '');
+      const out = JSON.parse(r.stdout);
+      assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse');
+      const t = out.hookSpecificOutput.additionalContext;
+      assert.match(t, new RegExp(`${status}`));
+      assert.match(t, /перевірки перед пушем немає/);
+      assert.match(t, /Скажи про це людині/);
+      assert.doesNotMatch(t, /втрачено|Зупинись/, 'це не втрата задачі: роботу не зупиняємо');
       assert.ok(!fs.existsSync(sb.state()));
+      const again = await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+      assert.equal(again.stdout, '');
+      assert.equal(k.reqs.length, 1);
+    });
+  });
+
+  test(`pre-tool: ${status} → команда йде, стан видалено, один раз сказано`, async () => {
+    await withKando({ status, body: { error: 'x' } }, async (k) => {
+      const sb = sandbox();
+      sb.writeState();
+      const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+      const out = JSON.parse(r.stdout);
+      assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+      assert.equal(out.hookSpecificOutput.permissionDecision, undefined);
+      assert.match(out.hookSpecificOutput.additionalContext, /перевірки перед пушем немає/);
+      assert.ok(!fs.existsSync(sb.state()));
+      const again = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+      assert.equal(again.stdout, '');
+      assert.equal(k.reqs.length, 1);
     });
   });
 }
+
+// Сигнал розминувся з кінцем скіла (паралельний хук прочитав стан до end). Сесія нічого не
+// втратила: скіл закінчив роботу сам, тож ані попередження, ані заборони, лише прибрати стан.
+const SKILL_DONE = { status: 409, body: { managed: true, held: false, lost: 'skill_done' } };
+
+test('post-tool: lost skill_done → без попередження, стан видалено, далі запитів немає', async () => {
+  await withKando(SKILL_DONE, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(r.stdout, '');
+    assert.ok(!fs.existsSync(sb.state()));
+    assert.ok(!fs.existsSync(sb.state() + '.beat'));
+    assert.ok(!fs.existsSync(sb.state() + '.warned'));
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(k.reqs.length, 1);
+  });
+});
+
+test('pre-tool: lost skill_done → без заборони, стан видалено', async () => {
+  await withKando(SKILL_DONE, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    assert.equal(r.stdout, '');
+    assert.ok(!fs.existsSync(sb.state()));
+  });
+});
+
+test('post-tool: 409 з іншою втратою стан лишає (рядок skill_done у повідомленні нічого не значить)', async () => {
+  await withKando(LOST('Текст зі словом skill_done і "lost" у ньому'), async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /втрачено/);
+    assert.ok(fs.existsSync(sb.state()));
+  });
+});
 
 test('post-tool: сервер не відповідає → порожній stdout, код 0, не довше за 6 с, стан лишається', async () => {
   await withKando('hang', async (k) => {
@@ -500,6 +610,70 @@ test('pre-tool: сервер не відповідає → без виводу, 
     assert.equal(r.code, 0);
     assert.equal(r.stdout, '');
     assert.ok(r.ms < 6000, `хук тривав ${r.ms} мс`);
+  });
+});
+
+// ─── довгі команди ───────────────────────────────────────────────────────────
+// Розбір посимвольний і в UTF-8 квадратичний: 20 КБ — близько 10 с, а хук має 6 с.
+const UTF8 = { LC_ALL: 'en_US.UTF-8' };
+const filler = (kb) => 'й'.repeat(kb * 512);
+const heredoc = (kb, word = 'текст') => `cat > f.txt <<'EOF'\n${word} ${filler(kb)}\nEOF`;
+
+test('pre-tool: 20 КБ без push і gh…pr → одразу вихід, без запиту', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, heredoc(20)), env: UTF8 });
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs.length, 0);
+    assert.ok(r.ms < 1500, `хук тривав ${r.ms} мс`);
+  });
+});
+
+test('pre-tool: 20 КБ із багатьма gh, але без pr → одразу вихід, без запиту', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'gh '.repeat(7000)), env: UTF8 });
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs.length, 0);
+    assert.ok(r.ms < 1500, `хук тривав ${r.ms} мс`);
+  });
+});
+
+for (const [name, word] of [['push', 'push notifications'], ['gh…pr', 'gh і pr']]) {
+  test(`pre-tool: понад 8 КБ із ${name} → не розбираємо, одразу питаємо сервер`, async () => {
+    await withKando(LOST(), async (k) => {
+      const sb = sandbox();
+      sb.writeState();
+      const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, heredoc(20, word)), env: UTF8 });
+      assert.equal(k.reqs.length, 1);
+      assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny');
+      assert.ok(r.ms < 1500, `хук тривав ${r.ms} мс`);
+    });
+  });
+}
+
+test('pre-tool: понад 8 КБ із push, задача утримується → команда йде', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, heredoc(20, 'push')), env: UTF8 });
+    assert.equal(k.reqs.length, 1);
+    assert.equal(r.stdout, '');
+  });
+});
+
+test('pre-tool: межа 8 КБ — коротша команда розбирається, push у лапках не спрацьовує', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const cmd = `git commit -m "push ${'x'.repeat(8192 - 40)}"`;
+    assert.ok(cmd.length <= 8192);
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, cmd), env: UTF8 });
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs.length, 0);
+    assert.ok(r.ms < 4000, `хук тривав ${r.ms} мс`);
   });
 });
 

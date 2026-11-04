@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # kando-session: повідомляє Kando, що ця локальна сесія Claude Code тримає задачу.
-#   kando-session begin --session <id> --number <N> --skill <name> [--takeover]
+#   kando-session begin --session <id> [--repo <owner/name>] --number <N> --skill <name> [--takeover]
 #   kando-session end --session <id>
 #   kando-session hook post-tool|pre-tool|session-end   (JSON хука — зі stdin)
 # Лише bash 3.2 і curl (jq може бракувати). Збої мережі скіл не зупиняють:
@@ -15,9 +15,13 @@ CONF_DIR="$HOME/.config/kando"
 SDIR="$CONF_DIR/sessions"
 TOKEN_FILE="$CONF_DIR/token"
 BEAT_EVERY=60   # сигнал не частіше разу на 60 с
+# Команди, довші за це, не розбираємо: розбір посимвольний і в UTF-8 квадратичний
+# (20 КБ — близько 10 с), а хук має 6 с. Такі команди одразу йдуть на перевірку.
+PARSE_LIMIT=8192
 # Текст для Claude, коли задачу втрачено. Нічого не пропонує робити самому:
-# begin: true перекриває кнопку «Відпустити», тож рішення за людиною.
-STOP_TEXT="Задачу втрачено. Зупинись: нічого не пуш і не змінюй PR, скажи про це людині й чекай її рішення."
+# begin: true перекриває кнопку «Відпустити», тож рішення за людиною. Але вихід назвати
+# треба: стан лишається, і без end пуші в цьому репо заблоковані на всю сесію.
+STOP_TEXT="Задачу втрачено. Зупинись: нічого не пуш і не змінюй PR, скажи про це людині й чекай її рішення. Лише якщо людина вирішить кинути задачу, виконай крок «Відпустити задачу в Kando»: це зніме блокування пушів у цьому репо. Сам цього не роби."
 
 RESP_STATUS=000
 RESP_BODY=
@@ -68,6 +72,9 @@ repo_of() { # dir
   printf '%s' "$r"
 }
 
+# Назви репозиторіїв GitHub не чутливі до регістру.
+same_repo() { [ "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]; }
+
 state_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 
 drop_state() { # id
@@ -106,10 +113,11 @@ not_managed() { printf '%s' "$RESP_BODY" | grep -Eq '"managed"[[:space:]]*:[[:sp
 # ─── begin / end ─────────────────────────────────────────────────────────────
 
 cmd_begin() {
-  local session= number= skill= takeover= repo body msg
+  local session= number= skill= takeover= want= repo body msg
   while [ $# -gt 0 ]; do
     case "$1" in
       --session) session=${2:-}; shift ;;
+      --repo) want=${2:-}; shift ;;
       --number) number=${2:-}; shift ;;
       --skill) skill=${2:-}; shift ;;
       --takeover) takeover=1 ;;
@@ -129,6 +137,12 @@ cmd_begin() {
   fi
   if ! repo=$(repo_of "$PWD"); then
     echo "Kando: origin не є репозиторієм GitHub, сесію не позначено."
+    return 0
+  fi
+  # Скіл працює з репо, яке назвала людина, а хуки й гілка — із цієї директорії. Позначити за
+  # origin означало б чужу картку. Порожнє значення: змінна не збереглась, лишається origin.
+  if [ -n "$want" ] && ! same_repo "$want" "$repo"; then
+    echo "Kando: скіл працює з репозиторієм $(sanitize "$want"), а origin цієї директорії — $repo. Сесію не позначено."
     return 0
   fi
 
@@ -197,7 +211,7 @@ hook_same_repo() {
   cwd=$(json_str "$INPUT" cwd | sed 's/\\\\/\\/g; s/\\\//\//g')
   [ -n "$cwd" ] || cwd=$PWD
   cur=$(repo_of "$cwd") || return 1
-  [ "$(printf '%s' "$cur" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$REPO" | tr 'A-Z' 'a-z')" ]
+  same_repo "$cur" "$REPO"
 }
 
 # Сигнал без begin. Після нього RESP_STATUS/RESP_BODY заповнені.
@@ -206,6 +220,16 @@ hook_signal() { # timeout
   case "$RESP_STATUS" in
     200) if not_managed; then drop_state "$SESSION"; else rm -f "$SDIR/$SESSION.warned"; fi ;;
     401|403) drop_state "$SESSION" ;;
+    # Запізнілий сигнал після кінця скіла: нічого не втрачено, лише прибрати стан.
+    409) if printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"skill_done"'; then drop_state "$SESSION"; fi ;;
+  esac
+}
+
+# Токен не прийнято посеред роботи: стан щойно видалено, разом із ним зник і захист. Сказати
+# можна лише тут: наступні хуки стану вже не побачать, тож це і є «один раз».
+hook_auth_notice() { # hookEventName
+  case "$RESP_STATUS" in
+    401|403) printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"Kando: токен не прийнято або немає права запису (%s). Kando більше не знає про цю сесію, перевірки перед пушем немає. Скажи про це людині; працювати можна далі."}}\n' "$1" "$RESP_STATUS" ;;
   esac
 }
 
@@ -226,6 +250,7 @@ hook_post_tool() {
   [ $((now - beat)) -lt $BEAT_EVERY ] && return 0
   echo "$now" > "$STATE.beat"
   hook_signal 5
+  hook_auth_notice PostToolUse
   if [ "$RESP_STATUS" = 409 ] && [ ! -e "$STATE.warned" ] && [ -f "$STATE" ]; then
     : > "$STATE.warned"
     m=$(hook_message)
@@ -242,6 +267,12 @@ hook_post_tool() {
 is_guarded_command() { # json-escaped command
   local cmd=$1 n i c q= tok= have=0 nl=$'\001' bs=$'\002'
   local -a toks
+  # Дешевий фільтр: більшість команд відсіюється тут, без розбору.
+  case "$cmd" in
+    *push*|*gh*pr*) ;;
+    *) return 1 ;;
+  esac
+  [ "${#cmd}" -gt "$PARSE_LIMIT" ] && return 0
   toks=()
   cmd=${cmd//\\\\/$bs}
   cmd=${cmd//\\n/$nl}
@@ -333,7 +364,8 @@ hook_pre_tool() {
   is_guarded_command "$(json_str "$INPUT" command)" || return 0
   hook_same_repo || return 0
   hook_signal 5
-  if [ "$RESP_STATUS" = 409 ]; then
+  hook_auth_notice PreToolUse
+  if [ "$RESP_STATUS" = 409 ] && [ -f "$STATE" ]; then
     printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Kando: %s %s"}}\n' "$(hook_message)" "$STOP_TEXT"
   fi
   return 0
