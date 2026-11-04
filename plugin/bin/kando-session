@@ -170,7 +170,7 @@ cmd_begin() {
       fi
       return 3 ;;
     401|403)
-      echo "Kando: токен не прийнято ($RESP_STATUS), перевірте ~/.config/kando/token. Сесію не позначено."
+      echo "Kando: токен не прийнято або немає права запису в репозиторій ($RESP_STATUS), перевірте ~/.config/kando/token і свої права. Сесію не позначено."
       [ -z "$takeover" ] || return 3 ;;
     400)
       echo "Kando: запит відхилено (400), сесію не позначено."
