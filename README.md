@@ -172,7 +172,7 @@ Antigravity, Gemini CLI, Codex читають ті самі `SKILL.md`, де з�
   вказівку зупинитись і сказати про це людині. Токен не прийнято (`401`, `403`): стан видаляється, і хук
   один раз каже, що перевірки перед пушем більше немає. Запізнілий сигнал після кінця скіла
   (`lost: skill_done`) задачу не повертає, скрипт мовчки прибирає стан.
-- `PreToolUse` (лише `Bash`) — перевірка перед `git push` і `gh pr create|edit|merge|close|ready|review|reopen|comment|update-branch`
+- `PreToolUse` (лише `Bash`) — перевірка перед `git push` і `gh pr create|edit|merge|close|ready|review|reopen|comment|update-branch|revert|lock|unlock`
   в тому самому репозиторії, що й узята задача. Таймаут 5 с: якщо Kando не відповіла вчасно, команда
   виконується. Втрачена задача — команда блокується з поясненням. Команди без `git` і `push` та без
   `gh`, `pr` і дії над PR хук відсіює без запиту; решта йде до Kando, навіть якщо пуш там лише згаданий.

@@ -613,13 +613,24 @@ test('begin --takeover без відповіді: код 3, стану нема�
     const sb = sandbox();
     const b = await begin(sb, k.url, ['--takeover']);
     assert.equal(b.code, 3);
-    assert.match(b.stdout, /не перебрано/);
+    assert.match(b.stdout, /перебирання не підтверджено/);
     assert.ok(!fs.existsSync(sb.state()));
     assert.ok(!fs.existsSync(sb.state() + '.pending'));
     await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
     assert.equal(k.reqs.length, 1);
   });
 });
+
+for (const status of [400, 401, 403]) {
+  test(`begin --takeover: ${status} → код 3, бо задачу не перебрано й працювати далі не можна`, async () => {
+    await withKando({ status, body: {} }, async (k) => {
+      const sb = sandbox();
+      const b = await begin(sb, k.url, ['--takeover']);
+      assert.equal(b.code, 3);
+      assert.ok(!fs.existsSync(sb.state()));
+    });
+  });
+}
 
 test('begin --takeover без відповіді не чіпає стан попередньої задачі', async () => {
   await withKando(COLD, async (k) => {
@@ -630,6 +641,70 @@ test('begin --takeover без відповіді не чіпає стан поп
     assert.equal(fs.readFileSync(sb.state(), 'utf8'), before);
   });
 });
+
+test('відмова на сам begin, коли висить .pending: хуки більше не беруть задачу, пуш заборонено', async () => {
+  let refuse = true;
+  const handler = (r, reqs) => (reqs.length === 1 ? COLD : refuse ? LOST('Тримає @bob', null) : HELD);
+  await withKando(handler, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    const second = await begin(sb, k.url);
+    assert.equal(second.code, 3);
+    assert.ok(!fs.existsSync(sb.state() + '.pending'));
+    refuse = false; // тримач закінчив, а скіл уже зупинився
+    sb.setBeat(0);
+    const count = k.reqs.length;
+    await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.equal(k.reqs.length, count, 'сесія не забирає задачу мовчки');
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.permissionDecision, 'deny');
+    assert.match(out.permissionDecisionReason, /Тримає @bob/);
+  });
+});
+
+test('begin у некерованому репо не знімає відмову й позначку з попередньої задачі', async () => {
+  const handler = (r, reqs) => (reqs.length === 1 ? COLD : reqs.length === 2 ? LOST('Тримає @bob', null) : { status: 200, body: { managed: false } });
+  await withKando(handler, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    assert.ok(fs.existsSync(sb.state() + '.refused'));
+    await begin(sb, k.url);
+    assert.ok(fs.existsSync(sb.state() + '.refused'));
+  });
+});
+
+test('файли стану прибрано повністю: .refused не переживає кінець скіла й новий begin без відповіді', async () => {
+  const handler = (r, reqs) => (reqs.length === 1 ? COLD : reqs.length === 2 ? LOST('Тримає @bob', null) : COLD);
+  await withKando(handler, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    await begin(sb, k.url);
+    assert.ok(!fs.existsSync(sb.state() + '.refused'), 'новий begin без відповіді');
+    assert.ok(fs.existsSync(sb.state() + '.pending'));
+    fs.writeFileSync(sb.state() + '.refused', 'x');
+    await run(sb, k.url, ['end', '--session', SID]);
+    assert.ok(!fs.existsSync(sb.state() + '.refused'), 'end');
+  });
+});
+
+// Паралельний хук прочитав старий стан, поки begin іще в дорозі: сервер уже переніс рядок, а файл
+// стану ще старий. Сесія нічого не втратила, тож ні зупинки, ні заборони.
+for (const [hook, input] of [['post-tool', hookIn], ['pre-tool', (sb) => bashIn(sb, 'git push')]]) {
+  test(`${hook}: lost moved → без попередження й заборони, стан лишається`, async () => {
+    const moved = { status: 409, body: { managed: true, held: false, lost: 'moved', message: 'Ця сесія вже веде задачу #8.' } };
+    await withKando(moved, async (k) => {
+      const sb = sandbox();
+      sb.writeState();
+      const r = await run(sb, k.url, ['hook', hook], { stdin: input(sb) });
+      assert.equal(r.stdout, '');
+      assert.ok(fs.existsSync(sb.state()));
+      assert.ok(!fs.existsSync(sb.state() + '.warned'));
+    });
+  });
+}
 
 // ─── відповідь розминулась зі зміною стану ───────────────────────────────────
 // Хук відправив сигнал, а поки чекав відповідь, скіл закінчився й почався наступний. Сервер
@@ -661,6 +736,16 @@ test('той самий номер, інший скіл: пізня відпов
   await withKando(handler, async (k) => {
     await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
     assert.ok(fs.existsSync(sb.state()));
+  });
+});
+
+test('кожен begin дає інший файл стану: пізня відповідь не сплутає той самий номер і скіл', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    const first = fs.readFileSync(sb.state(), 'utf8');
+    await begin(sb, k.url);
+    assert.notEqual(fs.readFileSync(sb.state(), 'utf8'), first);
   });
 });
 
@@ -753,6 +838,7 @@ const DENY = [
   'sudo -u me git push', 'nice git push', 'time -p git push', 'echo x | xargs git push', "bash -c 'git push'",
   'if a; then b; elif git push; then c; fi', '>/dev/null git push', '/usr/bin/git push', '/usr/local/bin/gh pr merge 5',
   'gh pr update-branch 5', 'gh pr reopen 5', 'gh pr comment 5 -b x', 'echo x | xargs gh pr merge',
+  'echo pr merge 5 | xargs gh', 'echo push | xargs git', 'gh pr revert 5', 'gh pr lock 5', 'gh pr unlock 5',
 ];
 for (const cmd of DENY) {
   test(`pre-tool: «${cmd}» + 409 → deny`, async () => {
@@ -773,7 +859,7 @@ for (const cmd of DENY) {
 const PASS = [
   'git status', 'gh pr view 5', 'npm test', 'ls push', 'npm run push',
   'gh pr list', 'gh pr --repo o/r view 5', 'gh pr view 5 --json reviews,mergeable',
-  'echo high priority', 'grep -r merge src', 'gh issue close 5', 'git log --oneline',
+  'echo high priority', 'grep -r merge src', 'gh pr view pre-merge', 'gh pr checks x-review', 'gh issue close 5', 'git log --oneline',
 ];
 for (const cmd of PASS) {
   test(`pre-tool: «${cmd}» → без запиту`, async () => {

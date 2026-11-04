@@ -4,7 +4,7 @@
 #   kando-session end --session <id>
 #   kando-session hook post-tool|pre-tool|session-end   (JSON хука — зі stdin)
 # Лише bash 3.2 і curl (jq може бракувати). Збої мережі скіл не зупиняють:
-# єдиний «зупиняючий» код — 3 у begin (задачу вже тримає інша сесія або її не перебрано).
+# єдиний «зупиняючий» код — 3 у begin (задачу вже тримає інша сесія або перебрати її не вдалось).
 
 # У GitHub Actions задачею керує диспетчер Kando, а не локальна сесія.
 [ "${GITHUB_ACTIONS:-}" = "true" ] && exit 0
@@ -73,6 +73,11 @@ repo_of() { # dir
 same_repo() { [ "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | tr 'A-Z' 'a-z')" ]; }
 
 state_get() { sed -n "s/^$2=//p" "$1" | head -1; }
+
+# began відрізняє кожен begin: хук звіряє файл, щоб не прийняти пізню відповідь за нову задачу.
+state_put() { # id repo number skill
+  printf 'repo=%s\nnumber=%s\nskill=%s\nbegan=%s.%s\n' "$2" "$3" "$4" "$$" "$(date +%s)" > "$SDIR/$1"
+}
 
 drop_state() { # id
   rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned" "$SDIR/$1.pending" "$SDIR/$1.refused"
@@ -147,32 +152,39 @@ cmd_begin() {
   api PUT "$session" "" 20 "$body"
   case "$RESP_STATUS" in
     200)
-      rm -f "$SDIR/$session.pending" "$SDIR/$session.refused"
       if not_managed; then
         echo "Kando: репозиторій $repo не керується Kando, сесію не позначено."
       else
-        printf 'repo=%s\nnumber=%s\nskill=%s\n' "$repo" "$number" "$skill" > "$SDIR/$session"
+        state_put "$session" "$repo" "$number" "$skill"
         date +%s > "$SDIR/$session.beat"
-        rm -f "$SDIR/$session.warned"
+        rm -f "$SDIR/$session.warned" "$SDIR/$session.pending" "$SDIR/$session.refused"
         echo "Kando: задачу #$number закріплено за цією сесією."
       fi ;;
     409)
       msg=$(sanitize "$(json_str "$RESP_BODY" message)")
       echo "Kando: ${msg:-задачу вже тримає інша сесія.}"
+      # Сервер відмовив і скіл зупиняється, тож хуки не мають повторювати begin, що чекав відповіді.
+      if [ -f "$SDIR/$session.pending" ]; then
+        rm -f "$SDIR/$session.pending"
+        printf '%s' "${msg:-задачу вже тримає інша сесія.}" > "$SDIR/$session.refused"
+      fi
       return 3 ;;
     401|403)
-      echo "Kando: токен не прийнято ($RESP_STATUS), перевірте ~/.config/kando/token. Сесію не позначено." ;;
+      echo "Kando: токен не прийнято ($RESP_STATUS), перевірте ~/.config/kando/token. Сесію не позначено."
+      [ -z "$takeover" ] || return 3 ;;
     400)
-      echo "Kando: запит відхилено (400), сесію не позначено." ;;
+      echo "Kando: запит відхилено (400), сесію не позначено."
+      [ -z "$takeover" ] || return 3 ;;
     *)
-      # Перебирання вирішує людина, а скіл тут зупиниться: хук не сміє виконати його потім.
+      # Перебирання вирішує людина, а скіл тут зупиниться: хук не сміє виконати його потім. Відповідь
+      # могла лише загубитись, тож повторити команду безпечно.
       if [ -n "$takeover" ]; then
-        echo "Kando: сервер недоступний ($RESP_STATUS), задачу не перебрано. Повтори, коли Kando відповідатиме."
+        echo "Kando: сервер не відповів ($RESP_STATUS), перебирання не підтверджено. Повтори команду, коли Kando відповідатиме."
         return 3
       fi
       # Сервер не відповів або віддав 5xx: працюємо далі, хуки спробують ще. Сигнал без begin
       # не повертає задачу після skill_done, тож .pending каже хукам повторити сам begin.
-      printf 'repo=%s\nnumber=%s\nskill=%s\n' "$repo" "$number" "$skill" > "$SDIR/$session"
+      state_put "$session" "$repo" "$number" "$skill"
       rm -f "$SDIR/$session.beat" "$SDIR/$session.warned" "$SDIR/$session.refused"
       : > "$SDIR/$session.pending"
       echo "Kando: сервер недоступний ($RESP_STATUS), продовжую без підтвердження."
@@ -235,7 +247,10 @@ hook_signal() { # timeout
     200) if not_managed; then drop_state "$SESSION"; else rm -f "$STATE.warned" "$STATE.pending"; fi ;;
     401|403) drop_state "$SESSION" ;;
     409)
-      if printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"skill_done"'; then
+      if printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"moved"'; then
+        # Сервер уже веде цю сесію на іншій задачі, а begin іще не відповів: нічого не втрачено.
+        RESP_STATUS=stale
+      elif printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"skill_done"'; then
         # Запізнілий сигнал після кінця скіла: нічого не втрачено, лише прибрати стан.
         drop_state "$SESSION"
       elif [ -n "$extra" ]; then
@@ -291,14 +306,13 @@ has_word() { # text alternatives
 }
 is_guarded_command() { # json-escaped command
   local text
-  case "$1" in
-    *git*push*|*push*git*) return 0 ;;
-    *gh*pr*) ;;
-    *) return 1 ;;
-  esac
+  # Окремі case: зразок із двома словами квадратичний на команді з багатьма git і без push.
+  case "$1" in *push*) case "$1" in *git*) return 0 ;; esac ;; esac
+  case "$1" in *gh*) ;; *) return 1 ;; esac
+  case "$1" in *pr*) ;; *) return 1 ;; esac
   text=$(printf '%s' "$1" | sed 's/\\[nrt]/ /g')
   has_word "$text" gh && has_word "$text" pr \
-    && has_word "$text" 'create|edit|merge|close|ready|review|reopen|comment|update-branch'
+    && has_word "$text" 'create|edit|merge|close|ready|review|reopen|comment|update-branch|revert|lock|unlock'
 }
 
 hook_pre_tool() {
