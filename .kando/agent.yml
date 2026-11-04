@@ -1,0 +1,3 @@
+# Оточення для агента Kando (режим C). Змінюйте вільно: див. https://kando-board.pp.ua/agent-flow.html
+node: "20"
+setup: []
