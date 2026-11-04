@@ -5,7 +5,9 @@ const SIGNATURE = '<sub>🤖';
 // Підпис службових коментарів диспетчера (відмови, «вже працює», dry run, збій).
 const DISPATCHER_SIGNATURE = '<sub>🤖 agent-flow</sub>';
 const TRIAGE_HEADER = '## 🔍 Тріаж';
-const QUESTIONS = '❓ Потрібно уточнити';
+// Питання — рядок, що починається з маркера (жирного чи заголовком), як у скілі triage.
+// Просто згадка в тексті — «Рядок «❓ Потрібно уточнити» прибрано» — не питання (kando-board#165).
+const QUESTIONS = /^[ \t]*(?:#{1,6}[ \t]+)?(?:\*\*|__)?❓ Потрібно уточнити/m;
 
 const LINKED_PRS = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
@@ -148,7 +150,7 @@ async function gather({ repo, kind, number, agentLogin, allowedUsers, ownRunId, 
   const humanFeedback = comments.some(c => isHuman(c) && Date.parse(c.created_at) > since);
 
   const lastTriage = comments.filter(c => (c.body || '').includes(TRIAGE_HEADER)).pop();
-  const openQuestions = Boolean(lastTriage && lastTriage.body.includes(QUESTIONS)
+  const openQuestions = Boolean(lastTriage && QUESTIONS.test(lastTriage.body)
     && !comments.some(c => isHuman(c) && Date.parse(c.created_at) > Date.parse(lastTriage.created_at)));
 
   return {
