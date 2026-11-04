@@ -42,3 +42,62 @@ test('merge: старі гілки ai/<N>-spec-mockup і kando-attachments не 
   assert.match(s, /ai\/<N>-spec-mockup/);
   assert.match(s, /kando-attachments/);
 });
+
+// Локальна сесія Claude Code повідомляє Kando, що тримає задачу (plugin/bin/kando-session).
+// Усі сім скілів мають однакові кроки «взяти» і «відпустити», лише з різним --skill.
+const SESSION_SKILLS = ['triage', 'feature-spec', 'bug-agent', 'implement', 'pr-review', 'pr-fix', 'merge'];
+
+for (const name of SESSION_SKILLS) {
+  test(`${name}: кроки «взяти» і «відпустити» задачу в Kando`, () => {
+    const s = skill(name);
+    const begin = s.indexOf('"${CLAUDE_PLUGIN_ROOT}/bin/kando-session" begin --session "${CLAUDE_SESSION_ID}"');
+    const end = s.indexOf('"${CLAUDE_PLUGIN_ROOT}/bin/kando-session" end --session "${CLAUDE_SESSION_ID}"');
+    assert.ok(begin > 0, 'є команда begin');
+    assert.ok(end > begin, 'end після begin');
+    assert.equal(s.split('kando-session" begin').length, 2, 'begin один раз');
+    assert.equal(s.split('kando-session" end').length, 2, 'end один раз');
+
+    const beginLine = s.slice(begin, s.indexOf('\n', begin));
+    assert.ok(beginLine.includes(`--skill ${name}`), 'назва скіла в --skill');
+    assert.match(beginLine, /--number /);
+
+    const takeSection = s.slice(s.lastIndexOf('\n## ', begin), s.indexOf('\n## ', begin));
+    assert.match(takeSection, /Контекст запуску \(диспетчер agent-flow\)/, 'пропуск під диспетчером');
+    assert.match(takeSection, /\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/kando-session` немає/, 'пропуск без скрипта');
+    assert.match(takeSection, /\$\{CLAUDE_SESSION_ID\}/);
+    assert.match(takeSection, /Код виходу `3`/);
+    assert.match(takeSection, /передай людині вивід/);
+    assert.match(takeSection, /--takeover/);
+    assert.match(takeSection, /лише за явним рішенням людини/);
+    assert.match(takeSection, /задачу втрачено/i);
+    assert.match(takeSection, /не запускай `begin` повторно/);
+    assert.match(takeSection, /на кожному шляху зупинки після взяття/);
+    // Про takeover не кажемо «сам»: рішення завжди за людиною.
+    for (const line of takeSection.split('\n').filter(l => l.includes('--takeover'))) assert.doesNotMatch(line, /\bсам(а|і|ому)?\b/);
+
+    const endSection = s.slice(s.lastIndexOf('\n## ', end), s.indexOf('\n## ', end));
+    assert.match(endSection, /Контекст запуску \(диспетчер agent-flow\)/);
+    assert.match(endSection, /на кожному шляху зупинки після взяття/);
+
+    // begin — після кроку з номером і до першої зміни стану; end — після останнього кроку, перед «Заборонено».
+    const firstChange = s.search(/Постав `ai:in-progress`|--add-label|gh (issue|pr) (edit|comment|close)|PR закритий або змерджений|Перевір кожну умову/);
+    assert.ok(firstChange < 0 || begin < firstChange, 'begin до першої зміни стану');
+    assert.ok(begin > s.search(/^## Крок 0/m), 'begin після кроку 0');
+    assert.ok(end < s.indexOf('\n## Заборонено'), 'end перед «Заборонено»');
+    const lastStep = [...s.matchAll(/^## Крок \d+\./gm)].pop().index;
+    assert.ok(end > lastStep, 'end після останнього нумерованого кроку');
+  });
+}
+
+test('скіли: нейтральні до редактора — в інших редакторах кроки пропускаються', () => {
+  for (const name of SESSION_SKILLS) {
+    assert.match(skill(name), /інший редактор/, name);
+  }
+});
+
+test('шаблони CI не викликають kando-session', () => {
+  const tpl = fs.readdirSync(path.join(__dirname, '..', 'templates'));
+  for (const f of tpl) {
+    assert.ok(!fs.readFileSync(path.join(__dirname, '..', 'templates', f), 'utf8').includes('kando-session'), f);
+  }
+});
