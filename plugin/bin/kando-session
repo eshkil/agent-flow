@@ -126,26 +126,29 @@ cmd_begin() {
     esac
     shift
   done
-  if ! valid_id "$session"; then echo "Kando: некоректний id сесії, пропускаю."; return 0; fi
-  if ! valid_number "$number"; then echo "Kando: некоректний номер задачі, пропускаю."; return 0; fi
-  if ! valid_skill "$skill"; then echo "Kando: некоректна назва скіла, пропускаю."; return 0; fi
+  # Без сервера перебирання не відбулось, а інша сесія досі тримає задачу: код 0 означав би «працюй далі».
+  local skip=0
+  [ -z "$takeover" ] || skip=3
+  if ! valid_id "$session"; then echo "Kando: некоректний id сесії, пропускаю."; return $skip; fi
+  if ! valid_number "$number"; then echo "Kando: некоректний номер задачі, пропускаю."; return $skip; fi
+  if ! valid_skill "$skill"; then echo "Kando: некоректна назва скіла, пропускаю."; return $skip; fi
 
   mkdir -p "$SDIR" 2>/dev/null
   find "$SDIR" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
 
   if ! have_token; then
     echo "Kando: токена немає (~/.config/kando/token), сесію не позначено."
-    return 0
+    return $skip
   fi
   if ! repo=$(repo_of "$PWD"); then
     echo "Kando: origin не є репозиторієм GitHub, сесію не позначено."
-    return 0
+    return $skip
   fi
   # Скіл працює з репо, яке назвала людина, а хуки й гілка — із цієї директорії. Позначити за
   # origin означало б чужу картку. Порожнє значення: змінна не збереглась, лишається origin.
   if [ -n "$want" ] && ! same_repo "$want" "$repo"; then
     echo "Kando: скіл працює з репозиторієм $(sanitize "$want"), а origin цієї директорії — $repo. Сесію не позначено."
-    return 0
+    return $skip
   fi
 
   body=$(put_body "$repo" "$number" "$skill" ',"begin":true'"${takeover:+,\"takeover\":true}")

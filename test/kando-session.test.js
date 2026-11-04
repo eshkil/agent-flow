@@ -632,6 +632,37 @@ for (const status of [400, 401, 403]) {
   });
 }
 
+// Без коду 3 скіл читає результат як «працюй далі», поки задачу досі тримає інша сесія.
+for (const [name, more, prep] of [
+  ['немає токена', [], { token: null }],
+  ['інший --repo', ['--repo', 'o/other'], {}],
+  ['origin не на GitHub', [], { origin: 'https://gitlab.com/o/r.git' }],
+]) {
+  test(`begin --takeover: ${name} → код 3, перебирання не відбулось`, async () => {
+    await withKando(HELD, async (k) => {
+      const sb = sandbox(prep);
+      assert.equal((await begin(sb, k.url, [...more, '--takeover'])).code, 3);
+      assert.equal(k.reqs.length, 0);
+      assert.equal((await begin(sb, k.url, more)).code, 0, 'без перебирання скіл працює далі');
+    });
+  });
+}
+
+test('begin --takeover: некоректний аргумент → код 3', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    const r = await run(sb, k.url, ['begin', '--session', 'a b', '--number', '7', '--skill', 'implement', '--takeover']);
+    assert.equal(r.code, 3);
+  });
+});
+
+test('begin --takeover: { managed: false } → код 0, тримача немає й перебирати нікого', async () => {
+  await withKando({ status: 200, body: { managed: false } }, async (k) => {
+    const sb = sandbox();
+    assert.equal((await begin(sb, k.url, ['--takeover'])).code, 0);
+  });
+});
+
 test('begin --takeover без відповіді не чіпає стан попередньої задачі', async () => {
   await withKando(COLD, async (k) => {
     const sb = sandbox();
