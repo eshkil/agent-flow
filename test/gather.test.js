@@ -86,6 +86,18 @@ test('gather: відкриті питання тріажу без відпові
   assert.equal(s.openQuestions, false);
 });
 
+// kando-board#165: оновлений тріаж написав «Рядок «❓ Потрібно уточнити» прибрано» — згадка не питання.
+test('gather: згадка маркера в тексті не є відкритим питанням; лише рядок, що з нього починається', async () => {
+  const open = async body => (await gather(ctx, fakeGithub(issueOnly(['ai:triaged'], [
+    comment('eshkil', `## 🔍 Тріаж (оновлено)\n${body}`, '2026-10-01T10:00:00Z'),
+  ])))).openQuestions;
+  assert.equal(await open('**Що змінилося:**\n- Рядок «❓ Потрібно уточнити» прибрано.'), false);
+  assert.equal(await open('> **❓ Потрібно уточнити:** цитата старого тріажу'), false);
+  assert.equal(await open('- **❓ Потрібно уточнити** — прибрано'), false);
+  assert.equal(await open('**Тип:** фіча\n**❓ Потрібно уточнити:** де кнопка?'), true);
+  assert.equal(await open('### ❓ Потрібно уточнити\nде кнопка?'), true);
+});
+
 test('gather: обирається відкритий повʼязаний PR', async () => {
   const s = await gather(ctx, fakeGithub(withPr()));
   assert.equal(s.pr.number, 40);
