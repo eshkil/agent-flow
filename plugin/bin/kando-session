@@ -15,17 +15,33 @@ CONF_DIR="$HOME/.config/kando"
 SDIR="$CONF_DIR/sessions"
 TOKEN_FILE="$CONF_DIR/token"
 BEAT_EVERY=60   # сигнал не частіше разу на 60 с
+# Текст для Claude, коли задачу втрачено. Нічого не пропонує робити самому:
+# begin: true перекриває кнопку «Відпустити», тож рішення за людиною.
+STOP_TEXT="Задачу втрачено. Зупинись: нічого не пуш і не змінюй PR, скажи про це людині й чекай її рішення."
 
 RESP_STATUS=000
 RESP_BODY=
 
 # ─── допоміжне ───────────────────────────────────────────────────────────────
 
-valid_id() { printf '%s' "$1" | grep -Eq '^[A-Za-z0-9-]+$'; }
+# Перевірки через case, а не grep '^…$': grep працює по рядках, тож
+# $'abc\n../../pwn' пройшов би.
+valid_id() { case "$1" in ''|*[!A-Za-z0-9-]*) return 1 ;; esac; }
+valid_number() { case "$1" in ''|*[!0-9]*) return 1 ;; esac; }
+valid_skill() { case "$1" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac; }
 
-# Значення рядкового поля JSON (перше входження, з екрануваннями як є).
+# Є непорожній токен?
+have_token() {
+  [ -r "$TOKEN_FILE" ] && [ -n "$(tr -d ' \r\n\t' < "$TOKEN_FILE" 2>/dev/null)" ]
+}
+
+# Значення рядкового поля JSON — ПЕРШЕ входження ключа, з екрануваннями як є.
+# Поля верхнього рівня (session_id, cwd) у stdin хука йдуть раніше за
+# tool_input, тож вкладений tool_input.cwd їх не перекриває. Лапки всередині
+# рядків екрановані (\"), тож ключ усередині значення не збігається.
 json_str() { # json name
-  printf '%s' "$1" | sed -En 's/^.*"'"$2"'"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)".*$/\1/p' | head -1
+  printf '%s' "$1" | grep -oE '"'"$2"'"[[:space:]]*:[[:space:]]*"(([^"\\]|\\.)*)"' | head -1 \
+    | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//'
 }
 
 # Для вставки в JSON і показу людині: без лапок, слешів і переносів рядків.
@@ -44,7 +60,11 @@ repo_of() { # dir
     github.com/*) r=${u#github.com/} ;;
     *) return 1 ;;
   esac
-  printf '%s' "$r" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 1
+  case "$r" in
+    */*/*|''|/*|*/|*[!A-Za-z0-9._/-]*) return 1 ;;
+    */*) ;;
+    *) return 1 ;;
+  esac
   printf '%s' "$r"
 }
 
@@ -59,7 +79,7 @@ drop_state() { # id
 api() { # METHOD id query timeout [body]
   local method=$1 id=$2 query=$3 tmo=$4 body=${5:-} tok out
   RESP_STATUS=000; RESP_BODY=
-  [ -r "$TOKEN_FILE" ] || return 1
+  have_token || return 1
   tok=$(tr -d ' \r\n\t' < "$TOKEN_FILE" | sed 's/\\/\\\\/g; s/"/\\"/g')
   [ -n "$tok" ] || return 1
   if [ -n "$body" ]; then
@@ -97,13 +117,13 @@ cmd_begin() {
     shift
   done
   if ! valid_id "$session"; then echo "Kando: некоректний id сесії, пропускаю."; return 0; fi
-  if ! printf '%s' "$number" | grep -Eq '^[0-9]+$'; then echo "Kando: некоректний номер задачі, пропускаю."; return 0; fi
-  if ! printf '%s' "$skill" | grep -Eq '^[A-Za-z0-9_-]+$'; then echo "Kando: некоректна назва скіла, пропускаю."; return 0; fi
+  if ! valid_number "$number"; then echo "Kando: некоректний номер задачі, пропускаю."; return 0; fi
+  if ! valid_skill "$skill"; then echo "Kando: некоректна назва скіла, пропускаю."; return 0; fi
 
   mkdir -p "$SDIR" 2>/dev/null
   find "$SDIR" -type f -mtime +7 -exec rm -f {} + 2>/dev/null
 
-  if [ ! -r "$TOKEN_FILE" ]; then
+  if ! have_token; then
     echo "Kando: токена немає (~/.config/kando/token), сесію не позначено."
     return 0
   fi
@@ -113,7 +133,7 @@ cmd_begin() {
   fi
 
   body=$(put_body "$repo" "$number" "$skill" ',"begin":true'"${takeover:+,\"takeover\":true}")
-  api PUT "$session" "" "${KANDO_BEGIN_TIMEOUT:-20}" "$body"
+  api PUT "$session" "" 20 "$body"
   case "$RESP_STATUS" in
     200)
       if not_managed; then
@@ -209,18 +229,112 @@ hook_post_tool() {
   if [ "$RESP_STATUS" = 409 ] && [ ! -e "$STATE.warned" ] && [ -f "$STATE" ]; then
     : > "$STATE.warned"
     m=$(hook_message)
-    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Kando: %s Не продовжуйте роботу над задачею #%s, поки скіл не візьме її знову."}}\n' "$m" "$NUMBER"
+    printf '{"hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"Kando: %s %s"}}\n' "$m" "$STOP_TEXT"
   fi
   return 0
 }
 
+# Чи є серед простих команд (розділених ; && || | & переносом, дужками й
+# зворотними лапками) git push або gh pr <create|edit|merge|close|ready|review>?
+# Лише розбір слів з урахуванням лапок: «push» має бути підкомандою git
+# (після глобальних опцій -C, -c, --git-dir…), а не словом у повідомленні чи шляху.
+# Вхід — значення "command" як у JSON (з екрануваннями).
+is_guarded_command() { # json-escaped command
+  local cmd=$1 n i c q= tok= have=0 nl=$'\001' bs=$'\002'
+  local -a toks
+  toks=()
+  cmd=${cmd//\\\\/$bs}
+  cmd=${cmd//\\n/$nl}
+  cmd=${cmd//\\t/ }
+  cmd=${cmd//\\r/ }
+  cmd=${cmd//\\\"/\"}
+  cmd=${cmd//\\\//\/}
+  cmd=${cmd//$bs/\\}
+  n=${#cmd}; i=0
+  while [ "$i" -le "$n" ]; do
+    c=${cmd:$i:1}
+    if [ "$i" -eq "$n" ]; then c=$nl; q=; fi
+    if [ "$q" = "'" ]; then
+      if [ "$c" = "'" ]; then q=; else tok="$tok$c"; fi
+    elif [ "$q" = '"' ]; then
+      case "$c" in
+        '"') q= ;;
+        '\') i=$((i + 1)); tok="$tok${cmd:$i:1}" ;;
+        "$nl") tok="$tok " ;;
+        *) tok="$tok$c" ;;
+      esac
+    else
+      case "$c" in
+        "'"|'"') q=$c; have=1 ;;
+        '\') i=$((i + 1)); tok="$tok${cmd:$i:1}"; have=1 ;;
+        ' '|$'\t') [ "$have" = 1 ] && { toks[${#toks[@]}]=$tok; tok=; have=0; } ;;
+        ';'|'&'|'|'|'('|')'|'`'|"$nl")
+          [ "$have" = 1 ] && { toks[${#toks[@]}]=$tok; tok=; have=0; }
+          if [ "${#toks[@]}" -gt 0 ] && simple_is_guarded "${toks[@]}"; then return 0; fi
+          toks=() ;;
+        *) tok="$tok$c"; have=1 ;;
+      esac
+    fi
+    i=$((i + 1))
+  done
+  return 1
+}
+
+# Слова однієї простої команди → 0, якщо це git push або gh pr <зміна>.
+simple_is_guarded() {
+  local i=1 t sub
+  set -- "$@"
+  # Службові слова й обгортки перед самою командою.
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      *=*|'{'|'!'|then|do|else|if|while|until|env|sudo|command|time|exec|nohup) shift ;;
+      *) break ;;
+    esac
+  done
+  [ $# -gt 0 ] || return 1
+  case "${1##*/}" in
+    git)
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env) shift 2 2>/dev/null || return 1 ;;
+          -*) shift ;;
+          *) [ "$1" = push ]; return ;;
+        esac
+      done
+      return 1 ;;
+    gh)
+      shift
+      # глобальні прапорці до «pr»
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -R|--repo) shift 2 2>/dev/null || return 1 ;;
+          -*) shift ;;
+          *) break ;;
+        esac
+      done
+      [ "${1:-}" = pr ] || return 1
+      shift
+      while [ $# -gt 0 ]; do
+        case "$1" in
+          -R|--repo) shift 2 2>/dev/null || return 1 ;;
+          -*) shift ;;
+          create|edit|merge|close|ready|review) return 0 ;;
+          *) return 1 ;;
+        esac
+      done
+      return 1 ;;
+  esac
+  return 1
+}
+
 hook_pre_tool() {
   hook_prepare || return 0
-  printf '%s' "$INPUT" | grep -Eq '\bgit\b[^;&|]*\bpush\b|\bgh +pr +(create|edit|merge|close|ready|review)\b' || return 0
+  is_guarded_command "$(json_str "$INPUT" command)" || return 0
   hook_same_repo || return 0
   hook_signal 5
   if [ "$RESP_STATUS" = 409 ]; then
-    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Kando: %s Команду зупинено: пуш і зміни PR заборонені, поки сесія не тримає задачу."}}\n' "$(hook_message)"
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Kando: %s %s"}}\n' "$(hook_message)" "$STOP_TEXT"
   fi
   return 0
 }

@@ -1,4 +1,4 @@
-const { test } = require('node:test');
+const { test, after } = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -8,6 +8,9 @@ const { spawn, spawnSync } = require('node:child_process');
 
 const SCRIPT = path.join(__dirname, '..', 'plugin', 'bin', 'kando-session');
 const SID = 'abc-123';
+
+const tmpDirs = [];
+after(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true }); });
 
 // ─── стенд ───────────────────────────────────────────────────────────────────
 // Фейковий Kando: записує запити, відповідає за чергою/функцією; mode 'hang' — мовчить.
@@ -35,10 +38,12 @@ async function fakeKando(handler) {
   };
 }
 
-function sandbox({ token = 'tok-secret', origin = 'git@github.com:o/r.git' } = {}) {
+function sandbox({ token = 'tok-secret', origin = 'git@github.com:o/r.git', underGit = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-home-'));
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ks repo '));
-  if (token) {
+  let cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'ks repo '));
+  tmpDirs.push(home, cwd);
+  if (underGit) { cwd = path.join(cwd, 'git', 'work'); fs.mkdirSync(cwd, { recursive: true }); }
+  if (token !== null) {
     fs.mkdirSync(path.join(home, '.config', 'kando'), { recursive: true });
     fs.writeFileSync(path.join(home, '.config', 'kando', 'token'), token + '\n');
   }
@@ -79,6 +84,15 @@ const bashIn = (sb, command) => hookIn(sb, { hook_event_name: 'PreToolUse', tool
 const HELD = { status: 200, body: { managed: true, held: true } };
 const LOST = (message = 'Задачу вже тримає @bob', lost = 'takeover') =>
   ({ status: 409, body: { managed: true, held: false, lost, own: false, holder: 'bob', message } });
+// Claude має зупинитись і чекати людину, а не перезапускати скіл сам.
+function assertStopText(t) {
+  assert.match(t, /втрачено/);
+  assert.match(t, /Зупинись/);
+  assert.match(t, /нічого не пуш/);
+  assert.match(t, /скажи про це людині/);
+  assert.match(t, /чекай її рішення/);
+  assert.doesNotMatch(t, /знову|заново|begin|перезапуск/i);
+}
 const begin = (sb, url, more = [], opts) =>
   run(sb, url, ['begin', '--session', SID, '--number', '7', '--skill', 'implement', ...more], opts);
 
@@ -160,6 +174,32 @@ for (const status of [401, 403]) {
     });
   });
 }
+
+test('begin: --session з переносом рядка ($\'abc\\n../../pwn\') відхиляється', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    const r = await run(sb, k.url, ['begin', '--session', 'abc\n../../pwn', '--number', '7', '--skill', 'implement']);
+    assert.equal(r.code, 0);
+    assert.equal(k.reqs.length, 0);
+    assert.ok(!fs.existsSync(sb.sdir) || fs.readdirSync(sb.sdir).length === 0);
+    for (const bad of [['--number', '7\nx', '--skill', 'implement'], ['--number', '7', '--skill', 'a\nb']]) {
+      const r2 = await run(sb, k.url, ['begin', '--session', SID, ...bad]);
+      assert.equal(r2.code, 0);
+    }
+    assert.equal(k.reqs.length, 0);
+  });
+});
+
+test('begin: порожній файл токена = немає токена', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox({ token: '' });
+    fs.writeFileSync(path.join(sb.home, '.config', 'kando', 'token'), '  \n');
+    const r = await begin(sb, k.url);
+    assert.equal(r.code, 0);
+    assert.equal(k.reqs.length, 0);
+    assert.ok(!fs.existsSync(sb.state()));
+  });
+});
 
 test('begin: без токена → код 0, запитів немає', async () => {
   await withKando(HELD, async (k) => {
@@ -247,16 +287,6 @@ test('begin: --session "../x" → код 0, нічого поза sessions/', as
   });
 });
 
-test('begin: сервер не відповідає → код 0, стан записано, вкладається в таймаут', async () => {
-  await withKando('hang', async (k) => {
-    const sb = sandbox();
-    const r = await begin(sb, k.url, [], { env: { KANDO_BEGIN_TIMEOUT: '2' } });
-    assert.equal(r.code, 0);
-    assert.ok(r.ms < 6000, `begin тривав ${r.ms} мс`);
-    assert.ok(fs.existsSync(sb.state()));
-  });
-});
-
 test('begin: сервер недоступний (порт закрито) → код 0, стан записано', async () => {
   const k = await fakeKando(HELD);
   const url = k.url;
@@ -314,6 +344,7 @@ test('post-tool: 409 → additionalContext з message; другий 409 мовч
     const out = JSON.parse(r1.stdout); // має бути валідний JSON попри спецсимволи
     assert.equal(out.hookSpecificOutput.hookEventName, 'PostToolUse');
     assert.match(out.hookSpecificOutput.additionalContext, /Перехоплено @bob/);
+    assertStopText(out.hookSpecificOutput.additionalContext);
     assert.ok(fs.existsSync(sb.state() + '.warned'));
     assert.ok(fs.existsSync(sb.state()));
 
@@ -364,7 +395,14 @@ test('post-tool: сервер не відповідає → порожній std
 });
 
 // ─── hook pre-tool ───────────────────────────────────────────────────────────
-for (const cmd of ['git push origin x', 'git -C . push', 'gh pr merge 5', 'gh pr create --title x']) {
+const DENY = [
+  'git push origin x', 'git -C . push', 'gh pr merge 5', 'gh pr create --title x',
+  'cd sub\ngit push', 'echo a\ngit push origin x', 'npm test\ngh pr merge 5', 'echo a\n\tgit push',
+  'git -c x=y push', 'cd x && git push', 'git --git-dir=.git push', 'git -C "my dir" push origin x',
+  'gh pr --repo o/r merge 5', 'gh -R o/r pr close 3', 'true || git push', 'echo a | git push', 'FOO=1 git push',
+  'echo "a\\"b" && git push',
+];
+for (const cmd of DENY) {
   test(`pre-tool: «${cmd}» + 409 → deny`, async () => {
     await withKando(LOST('Задачу тримає @bob'), async (k) => {
       const sb = sandbox();
@@ -374,12 +412,19 @@ for (const cmd of ['git push origin x', 'git -C . push', 'gh pr merge 5', 'gh pr
       assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
       assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
       assert.match(out.hookSpecificOutput.permissionDecisionReason, /Задачу тримає @bob/);
+      assertStopText(out.hookSpecificOutput.permissionDecisionReason);
       assert.ok(fs.existsSync(sb.state()), 'стан лишається, щоб перевірка блокувала й далі');
     });
   });
 }
 
-for (const cmd of ['git status', 'gh pr view 5', 'npm test']) {
+const PASS = [
+  'git status', 'gh pr view 5', 'npm test', 'ls push', 'npm run push',
+  'git commit -m "add push notifications"', 'git stash push', 'git log --grep=push',
+  'git config push.default simple', 'git checkout -b fix/push-bug', 'git commit -m "x\ngit push"',
+  'echo "git push"', 'gh pr list', 'gh pr --repo o/r view 5',
+];
+for (const cmd of PASS) {
   test(`pre-tool: «${cmd}» → без запиту`, async () => {
     await withKando(LOST(), async (k) => {
       const sb = sandbox();
@@ -390,6 +435,52 @@ for (const cmd of ['git status', 'gh pr view 5', 'npm test']) {
     });
   });
 }
+
+test('pre-tool: опис із «git push» (не command) не спрацьовує', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], {
+      stdin: hookIn(sb, { hook_event_name: 'PreToolUse', tool_input: { command: 'npm test', description: 'Run tests before git push' } }),
+    });
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs.length, 0);
+  });
+});
+
+test('pre-tool: cwd під /git/ і слово push у команді без git push → без запиту', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox({ underGit: true });
+    sb.writeState();
+    for (const cmd of ['ls push', 'npm run push']) {
+      const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, cmd) });
+      assert.equal(r.stdout, '');
+    }
+    assert.equal(k.reqs.length, 0);
+  });
+});
+
+test('pre-tool: cwd іншого репо → git push без перевірки (gate hook_same_repo)', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox({ origin: 'git@github.com:other/thing.git' });
+    sb.writeState(); // стан для o/r
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push origin x') });
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs.length, 0);
+  });
+});
+
+test('вкладений tool_input.cwd не перекриває cwd верхнього рівня', async () => {
+  await withKando(LOST(), async (k) => {
+    const sb = sandbox();
+    const other = sandbox({ origin: 'git@github.com:other/thing.git' });
+    sb.writeState();
+    const stdin = JSON.stringify({ session_id: SID, cwd: sb.cwd, hook_event_name: 'PreToolUse', tool_name: 'Bash',
+      tool_input: { command: 'git push', cwd: other.cwd } });
+    const r = await run(sb, k.url, ['hook', 'pre-tool'], { stdin });
+    assert.equal(JSON.parse(r.stdout).hookSpecificOutput.permissionDecision, 'deny');
+  });
+});
 
 test('pre-tool: 200 → без виводу', async () => {
   await withKando(HELD, async (k) => {
@@ -479,6 +570,7 @@ test('токен не потрапляє в аргументи curl і не др
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'ks-bin-'));
     const real = spawnSync('which', ['curl'], { encoding: 'utf8' }).stdout.trim();
     const log = path.join(bin, 'argv.log');
+    tmpDirs.push(bin);
     fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\nprintf '%s\\n' "$@" >> '${log}'\nexec '${real}' "$@"\n`, { mode: 0o755 });
     const PATH = `${bin}:${process.env.PATH}`;
     const outs = [
@@ -488,7 +580,11 @@ test('токен не потрапляє в аргументи curl і не др
       await run(sb, k.url, ['hook', 'session-end'], { stdin: hookIn(sb), path: PATH }),
     ];
     assert.ok(fs.existsSync(log), 'обгортка curl мала спрацювати');
-    assert.ok(!fs.readFileSync(log, 'utf8').includes('SECRET-TOKEN-VALUE'), 'токен в argv curl');
+    const argv = fs.readFileSync(log, 'utf8');
+    assert.ok(!argv.includes('SECRET-TOKEN-VALUE'), 'токен в argv curl');
+    // таймаути -m: begin 20, post-tool 5, pre-tool 5, session-end 4
+    const tmo = [...argv.matchAll(/^-m\n(\d+)$/gm)].map((m) => m[1]);
+    assert.deepEqual(tmo, ['20', '5', '5', '4']);
     for (const o of outs) assert.ok(!(o.stdout + o.stderr).includes('SECRET-TOKEN-VALUE'));
     assert.ok(k.reqs.every((r) => r.auth === 'Bearer SECRET-TOKEN-VALUE'), 'токен усе ж мав дійти до сервера');
   });
