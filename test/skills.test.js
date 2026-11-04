@@ -60,14 +60,22 @@ for (const name of SESSION_SKILLS) {
     const beginLine = s.slice(begin, s.indexOf('\n', begin));
     assert.ok(beginLine.includes(`--skill ${name}`), 'назва скіла в --skill');
     assert.match(beginLine, /--number /);
+    // Скіл може працювати з іншим репо, ніж origin: тримання не має сісти не на ту задачу.
+    assert.ok(beginLine.includes('--repo "$REPO"'), 'репо передано явно');
+    assert.ok(s.indexOf('REPO') < begin, '$REPO відомий до begin');
 
     const takeSection = s.slice(s.lastIndexOf('\n## ', begin), s.indexOf('\n## ', begin));
     assert.match(takeSection, /Контекст запуску \(диспетчер agent-flow\)/, 'пропуск під диспетчером');
-    assert.match(takeSection, /незаміненими змінними чи файла скрипта немає/, 'пропуск без скрипта чи змінних');
+    // Лише про змінні самого Claude Code: `$REPO` у команді теж незамінена змінна, але він не привід пропускати.
+    assert.match(takeSection, /незаміненими змінними `CLAUDE_…` чи файла скрипта немає/, 'пропуск без скрипта чи змінних');
     assert.match(takeSection, /Код виходу `3`/);
     assert.match(takeSection, /передай людині вивід/);
     assert.match(takeSection, /--takeover/);
     assert.match(takeSection, /лише за явним рішенням людини/);
+    // Перебрати можна лише свою сесію (спека, «Перебрати свою сесію»).
+    assert.doesNotMatch(takeSection, /перебрати чужу сесію/);
+    assert.match(takeSection, /інша твоя сесія/);
+    assert.match(takeSection, /Чужу сесію чи запуск Kando перебрати не можна/);
     assert.match(takeSection, /задачу втрачено/i);
     assert.match(takeSection, /не запускай `begin` повторно/);
     assert.match(takeSection, /на кожному шляху зупинки після взяття/);
@@ -94,6 +102,11 @@ for (const name of SESSION_SKILLS) {
 
     // Втрачена задача: end не викликати.
     assert.match(takeSection, /`end` \*\*не виконуй\*\*/);
+    // Після «Відпустити» пуші заблоковані на всю сесію: вихід є, але рішення за людиною.
+    assert.match(takeSection, /людина прямо вирішила кинути задачу[^\n]*виконай `end`/);
+    assert.match(takeSection, /Сам цього не роби/);
+    assert.match(takeSection, /не чіпай лейбли/);
+    assert.match(endSection, /хіба що людина вирішила кинути задачу/);
     assert.match(takeSection, /крім випадку, коли задачу втрачено/);
     assert.match(endSection, /втрачена задача/);
     // У реченні про умову пропуску немає літералів змінних.
@@ -105,7 +118,7 @@ for (const name of SESSION_SKILLS) {
 // Зупинки, де скіл чекає людину чи здається, — після begin; на місці зупинки має стояти «Відпустити».
 const RELEASE = 'Виконай крок «Відпустити задачу в Kando»';
 const STOP_SITES = {
-  'bug-agent': ['напиши, який саме крок не вдалося виконати й чому.', 'це продуктове рішення → `needs-human`.', 'Це нормальний і очікуваний результат, а не поразка.'],
+  'bug-agent': ['напиши, який саме крок не вдалося виконати й чому.', 'і 2–3 уточнювальні питання авторові. Не закривай тікет.', 'це продуктове рішення → `needs-human`.', 'Це нормальний і очікуваний результат, а не поразка.'],
   implement: ['чим можна довести критерії.', 'Не переписуй завдання на ходу.'],
   'pr-fix': ['Для повторного рев\'ю — `agent:go`.» і зупинись.', 'виправ або зупинись із `needs-human`.', '2–3 варіанти рішення.'],
   merge: ['і **зупинись без дій**.'],
@@ -130,6 +143,23 @@ test('triage: begin після зупинок кроку 0б (закритий, 
   const label = s.indexOf('Постав `ai:in-progress` і працюй');
   assert.ok(stops > 0 && begin > stops && label > begin);
 });
+
+// Після kill -9 лишається ai:in-progress: нова сесія зупинилась би на лейблі ще до begin і ніколи
+// не дійшла б до --takeover.
+for (const name of ['triage', 'feature-spec', 'bug-agent']) {
+  test(`${name}: явна команда людини перебрати задачу знімає зупинку на ai:in-progress`, () => {
+    const s = skill(name);
+    const begin = s.indexOf('kando-session" begin');
+    const i = s.indexOf('Людина прямо наказала перебрати задачу');
+    assert.ok(i > 0 && i < begin, 'виняток стоїть до begin, поруч із зупинкою');
+    const para = s.slice(i, s.indexOf('\n\n', i));
+    assert.match(para, /`ai:in-progress`/);
+    assert.match(para, /`--takeover`/);
+    assert.match(para, /«закріплено» доводить, що лейбл застарілий/);
+    // no-managed, немає токена, код 3: лейбл нічим не спростовано.
+    assert.match(para, /Будь-який інший вивід цього не доводить: зупинись/);
+  });
+}
 
 test('pr-fix: перевірка закритого PR — до begin', () => {
   const s = skill('pr-fix');
