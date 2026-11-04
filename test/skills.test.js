@@ -69,6 +69,8 @@ for (const name of SESSION_SKILLS) {
     // Лише про змінні самого Claude Code: `$REPO` у команді теж незамінена змінна, але він не привід пропускати.
     assert.match(takeSection, /незаміненими змінними `CLAUDE_…` чи файла скрипта немає/, 'пропуск без скрипта чи змінних');
     assert.match(takeSection, /Код виходу `3`/);
+    // allowed-tools покриває лише сам виклик: будь-який хвіст дає запит дозволу чи відмову.
+    assert.match(takeSection, /окремим викликом Bash, рівно як написано: без `; echo`, `&&` чи `\|`/);
     assert.match(takeSection, /передай людині вивід/);
     assert.match(takeSection, /--takeover/);
     assert.match(takeSection, /лише за явним рішенням людини/);
@@ -84,6 +86,7 @@ for (const name of SESSION_SKILLS) {
 
     const endSection = s.slice(s.lastIndexOf('\n## ', end), s.indexOf('\n## ', end));
     assert.match(endSection, /Контекст запуску \(диспетчер agent-flow\)/);
+    assert.match(endSection, /окремим викликом Bash, рівно як написано/);
     assert.match(endSection, /на кожному шляху зупинки після взяття/);
 
     // Якорі мають існувати: жодних порожніх шляхів у перевірках.
