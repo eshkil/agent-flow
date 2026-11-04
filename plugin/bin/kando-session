@@ -4,7 +4,7 @@
 #   kando-session end --session <id>
 #   kando-session hook post-tool|pre-tool|session-end   (JSON хука — зі stdin)
 # Лише bash 3.2 і curl (jq може бракувати). Збої мережі скіл не зупиняють:
-# єдиний «зупиняючий» код — 3 у begin (задачу вже тримає інша сесія).
+# єдиний «зупиняючий» код — 3 у begin (задачу вже тримає інша сесія або її не перебрано).
 
 # У GitHub Actions задачею керує диспетчер Kando, а не локальна сесія.
 [ "${GITHUB_ACTIONS:-}" = "true" ] && exit 0
@@ -15,9 +15,6 @@ CONF_DIR="$HOME/.config/kando"
 SDIR="$CONF_DIR/sessions"
 TOKEN_FILE="$CONF_DIR/token"
 BEAT_EVERY=60   # сигнал не частіше разу на 60 с
-# Команди, довші за це, не розбираємо: розбір посимвольний і в UTF-8 квадратичний
-# (20 КБ — близько 10 с), а хук має 6 с. Такі команди одразу йдуть на перевірку.
-PARSE_LIMIT=8192
 # Текст для Claude, коли задачу втрачено. Нічого не пропонує робити самому:
 # begin: true перекриває кнопку «Відпустити», тож рішення за людиною. Але вихід назвати
 # треба: стан лишається, і без end пуші в цьому репо заблоковані на всю сесію.
@@ -78,7 +75,7 @@ same_repo() { [ "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" = "$(printf '%s' "$2" | t
 state_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 
 drop_state() { # id
-  rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned" "$SDIR/$1.pending"
+  rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned" "$SDIR/$1.pending" "$SDIR/$1.refused"
 }
 
 # HTTP-виклик. Токен іде в curl через конфіг на stdin, а не в аргументах
@@ -150,7 +147,7 @@ cmd_begin() {
   api PUT "$session" "" 20 "$body"
   case "$RESP_STATUS" in
     200)
-      rm -f "$SDIR/$session.pending"
+      rm -f "$SDIR/$session.pending" "$SDIR/$session.refused"
       if not_managed; then
         echo "Kando: репозиторій $repo не керується Kando, сесію не позначено."
       else
@@ -168,11 +165,16 @@ cmd_begin() {
     400)
       echo "Kando: запит відхилено (400), сесію не позначено." ;;
     *)
+      # Перебирання вирішує людина, а скіл тут зупиниться: хук не сміє виконати його потім.
+      if [ -n "$takeover" ]; then
+        echo "Kando: сервер недоступний ($RESP_STATUS), задачу не перебрано. Повтори, коли Kando відповідатиме."
+        return 3
+      fi
       # Сервер не відповів або віддав 5xx: працюємо далі, хуки спробують ще. Сигнал без begin
       # не повертає задачу після skill_done, тож .pending каже хукам повторити сам begin.
       printf 'repo=%s\nnumber=%s\nskill=%s\n' "$repo" "$number" "$skill" > "$SDIR/$session"
-      rm -f "$SDIR/$session.beat" "$SDIR/$session.warned"
-      printf '%s' "${takeover:+takeover}" > "$SDIR/$session.pending"
+      rm -f "$SDIR/$session.beat" "$SDIR/$session.warned" "$SDIR/$session.refused"
+      : > "$SDIR/$session.pending"
       echo "Kando: сервер недоступний ($RESP_STATUS), продовжую без підтвердження."
       ;;
   esac
@@ -195,13 +197,14 @@ cmd_end() {
 
 # ─── хуки ────────────────────────────────────────────────────────────────────
 
-# Спільна підготовка: INPUT, SESSION, STATE, REPO, NUMBER, SKILL; 1 — нічого робити.
+# Спільна підготовка: INPUT, SESSION, STATE, SNAP, REPO, NUMBER, SKILL; 1 — нічого робити.
 hook_prepare() {
   INPUT=$(cat)
   SESSION=$(printf '%s' "$INPUT" | grep -oE '"session_id"[[:space:]]*:[[:space:]]*"[A-Za-z0-9-]+"' | head -1 | sed 's/.*:[[:space:]]*"\(.*\)"/\1/')
   valid_id "$SESSION" || return 1
   STATE="$SDIR/$SESSION"
   [ -f "$STATE" ] || return 1
+  SNAP=$(cat "$STATE" 2>/dev/null)
   REPO=$(state_get "$STATE" repo)
   NUMBER=$(state_get "$STATE" number)
   SKILL=$(state_get "$STATE" skill)
@@ -221,16 +224,26 @@ hook_same_repo() {
 # Сигнал; якщо сервер не відповів на begin, то й він сам. Після нього RESP_STATUS/RESP_BODY заповнені.
 hook_signal() { # timeout
   local extra=
-  if [ -f "$STATE.pending" ]; then
-    extra=',"begin":true'
-    [ "$(cat "$STATE.pending" 2>/dev/null)" = takeover ] && extra="$extra"',"takeover":true'
-  fi
+  [ -f "$STATE.pending" ] && extra=',"begin":true'
   api PUT "$SESSION" "" "$1" "$(put_body "$REPO" "$NUMBER" "$SKILL" "$extra")"
+  # Поки чекали відповідь, скіл закінчився чи почався інший: вона стосується старого стану.
+  if [ "$(cat "$STATE" 2>/dev/null)" != "$SNAP" ]; then
+    RESP_STATUS=stale
+    return 0
+  fi
   case "$RESP_STATUS" in
     200) if not_managed; then drop_state "$SESSION"; else rm -f "$STATE.warned" "$STATE.pending"; fi ;;
     401|403) drop_state "$SESSION" ;;
-    # Запізнілий сигнал після кінця скіла: нічого не втрачено, лише прибрати стан.
-    409) if printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"skill_done"'; then drop_state "$SESSION"; fi ;;
+    409)
+      if printf '%s' "$RESP_BODY" | grep -Eq '"lost"[[:space:]]*:[[:space:]]*"skill_done"'; then
+        # Запізнілий сигнал після кінця скіла: нічого не втрачено, лише прибрати стан.
+        drop_state "$SESSION"
+      elif [ -n "$extra" ]; then
+        # Це відмова на begin: те саме, що код 3. Зупинена сесія не забирає задачу пізніше, коли
+        # тримач закінчить, тож запитів більше немає, а стан лишається, щоб блокувати пуші.
+        rm -f "$STATE.pending"
+        hook_message > "$STATE.refused"
+      fi ;;
   esac
 }
 
@@ -251,6 +264,7 @@ hook_message() {
 
 hook_post_tool() {
   hook_prepare || return 0
+  [ -f "$STATE.refused" ] && return 0
   hook_same_repo || return 0
   local now beat m
   now=$(date +%s)
@@ -268,110 +282,33 @@ hook_post_tool() {
   return 0
 }
 
-# Чи є серед простих команд (розділених ; && || | & переносом, дужками й
-# зворотними лапками) git push або gh pr <create|edit|merge|close|ready|review>?
-# Лише розбір слів з урахуванням лапок: «push» має бути підкомандою git
-# (після глобальних опцій -C, -c, --git-dir…), а не словом у повідомленні чи шляху.
-# Вхід — значення "command" як у JSON (з екрануваннями).
+# Команда згадує git push або зміну PR через gh? Навмисно не розбираємо shell: heredoc, апострофи,
+# перенесення рядків, підстановки й обгортки ховали пуш від розбору. Перевірка лише питає сервер: поки
+# задача утримується, зайвий запит нічого не коштує, а хибна заборона можлива тільки в сесії, якій уже
+# сказано зупинитись. Вхід — значення "command" як у JSON (з екрануваннями).
+has_word() { # text alternatives
+  printf '%s' "$1" | grep -Eq "(^|[^[:alnum:]_-])($2)(\$|[^[:alnum:]_-])"
+}
 is_guarded_command() { # json-escaped command
-  local cmd=$1 n i c q= tok= have=0 nl=$'\001' bs=$'\002'
-  local -a toks
-  # Дешевий фільтр: більшість команд відсіюється тут, без розбору.
-  case "$cmd" in
-    *push*|*gh*pr*) ;;
+  local text
+  case "$1" in
+    *git*push*|*push*git*) return 0 ;;
+    *gh*pr*) ;;
     *) return 1 ;;
   esac
-  [ "${#cmd}" -gt "$PARSE_LIMIT" ] && return 0
-  toks=()
-  cmd=${cmd//\\\\/$bs}
-  cmd=${cmd//\\n/$nl}
-  cmd=${cmd//\\t/ }
-  cmd=${cmd//\\r/ }
-  cmd=${cmd//\\\"/\"}
-  cmd=${cmd//\\\//\/}
-  cmd=${cmd//$bs/\\}
-  n=${#cmd}; i=0
-  while [ "$i" -le "$n" ]; do
-    c=${cmd:$i:1}
-    if [ "$i" -eq "$n" ]; then c=$nl; q=; fi
-    if [ "$q" = "'" ]; then
-      if [ "$c" = "'" ]; then q=; else tok="$tok$c"; fi
-    elif [ "$q" = '"' ]; then
-      case "$c" in
-        '"') q= ;;
-        '\') i=$((i + 1)); tok="$tok${cmd:$i:1}" ;;
-        "$nl") tok="$tok " ;;
-        *) tok="$tok$c" ;;
-      esac
-    else
-      case "$c" in
-        "'"|'"') q=$c; have=1 ;;
-        '\') i=$((i + 1)); tok="$tok${cmd:$i:1}"; have=1 ;;
-        ' '|$'\t') [ "$have" = 1 ] && { toks[${#toks[@]}]=$tok; tok=; have=0; } ;;
-        ';'|'&'|'|'|'('|')'|'`'|"$nl")
-          [ "$have" = 1 ] && { toks[${#toks[@]}]=$tok; tok=; have=0; }
-          if [ "${#toks[@]}" -gt 0 ] && simple_is_guarded "${toks[@]}"; then return 0; fi
-          toks=() ;;
-        *) tok="$tok$c"; have=1 ;;
-      esac
-    fi
-    i=$((i + 1))
-  done
-  return 1
-}
-
-# Слова однієї простої команди → 0, якщо це git push або gh pr <зміна>.
-simple_is_guarded() {
-  local i=1 t sub
-  set -- "$@"
-  # Службові слова й обгортки перед самою командою.
-  while [ $# -gt 0 ]; do
-    case "$1" in
-      *=*|'{'|'!'|then|do|else|if|while|until|env|sudo|command|time|exec|nohup) shift ;;
-      *) break ;;
-    esac
-  done
-  [ $# -gt 0 ] || return 1
-  case "${1##*/}" in
-    git)
-      shift
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          -C|-c|--git-dir|--work-tree|--namespace|--exec-path|--super-prefix|--config-env) shift 2 2>/dev/null || return 1 ;;
-          -*) shift ;;
-          *) [ "$1" = push ]; return ;;
-        esac
-      done
-      return 1 ;;
-    gh)
-      shift
-      # глобальні прапорці до «pr»
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          -R|--repo) shift 2 2>/dev/null || return 1 ;;
-          -*) shift ;;
-          *) break ;;
-        esac
-      done
-      [ "${1:-}" = pr ] || return 1
-      shift
-      while [ $# -gt 0 ]; do
-        case "$1" in
-          -R|--repo) shift 2 2>/dev/null || return 1 ;;
-          -*) shift ;;
-          create|edit|merge|close|ready|review) return 0 ;;
-          *) return 1 ;;
-        esac
-      done
-      return 1 ;;
-  esac
-  return 1
+  text=$(printf '%s' "$1" | sed 's/\\[nrt]/ /g')
+  has_word "$text" gh && has_word "$text" pr \
+    && has_word "$text" 'create|edit|merge|close|ready|review|reopen|comment|update-branch'
 }
 
 hook_pre_tool() {
   hook_prepare || return 0
   is_guarded_command "$(json_str "$INPUT" command)" || return 0
   hook_same_repo || return 0
+  if [ -f "$STATE.refused" ]; then
+    printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Kando: %s %s"}}\n' "$(cat "$STATE.refused" 2>/dev/null)" "$STOP_TEXT"
+    return 0
+  fi
   hook_signal 5
   hook_auth_notice PreToolUse
   if [ "$RESP_STATUS" = 409 ] && [ -f "$STATE" ]; then

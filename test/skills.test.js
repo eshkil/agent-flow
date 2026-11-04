@@ -106,6 +106,10 @@ for (const name of SESSION_SKILLS) {
     assert.match(takeSection, /людина прямо вирішила кинути задачу[^\n]*виконай `end`/);
     assert.match(takeSection, /Сам цього не роби/);
     assert.match(takeSection, /не чіпай лейбли/);
+    // Кинуту задачу лейбл не тримає, але чужий запуск він не має зрушити: це підтверджує людина.
+    if (/Постав `ai:in-progress`/.test(s)) {
+      assert.match(takeSection, /виконай `end`[^\n]*`ai:in-progress` зніми, лише якщо людина підтвердить/);
+    }
     assert.match(endSection, /хіба що людина вирішила кинути задачу/);
     assert.match(takeSection, /крім випадку, коли задачу втрачено/);
     assert.match(endSection, /втрачена задача/);
