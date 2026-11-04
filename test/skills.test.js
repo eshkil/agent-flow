@@ -42,3 +42,148 @@ test('merge: старі гілки ai/<N>-spec-mockup і kando-attachments не 
   assert.match(s, /ai\/<N>-spec-mockup/);
   assert.match(s, /kando-attachments/);
 });
+
+// Локальна сесія Claude Code повідомляє Kando, що тримає задачу (plugin/bin/kando-session).
+// Усі сім скілів мають однакові кроки «взяти» і «відпустити», лише з різним --skill.
+const SESSION_SKILLS = ['triage', 'feature-spec', 'bug-agent', 'implement', 'pr-review', 'pr-fix', 'merge'];
+
+for (const name of SESSION_SKILLS) {
+  test(`${name}: кроки «взяти» і «відпустити» задачу в Kando`, () => {
+    const s = skill(name);
+    const begin = s.indexOf('"${CLAUDE_PLUGIN_ROOT}/bin/kando-session" begin --session "${CLAUDE_SESSION_ID}"');
+    const end = s.indexOf('"${CLAUDE_PLUGIN_ROOT}/bin/kando-session" end --session "${CLAUDE_SESSION_ID}"');
+    assert.ok(begin > 0, 'є команда begin');
+    assert.ok(end > begin, 'end після begin');
+    assert.equal(s.split('kando-session" begin').length, 2, 'begin один раз');
+    assert.equal(s.split('kando-session" end').length, 2, 'end один раз');
+
+    const beginLine = s.slice(begin, s.indexOf('\n', begin));
+    assert.ok(beginLine.includes(`--skill ${name}`), 'назва скіла в --skill');
+    assert.match(beginLine, /--number /);
+    // Скіл може працювати з іншим репо, ніж origin: тримання не має сісти не на ту задачу.
+    assert.ok(beginLine.includes('--repo "$REPO"'), 'репо передано явно');
+    assert.ok(s.indexOf('REPO') < begin, '$REPO відомий до begin');
+
+    const takeSection = s.slice(s.lastIndexOf('\n## ', begin), s.indexOf('\n## ', begin));
+    assert.match(takeSection, /Контекст запуску \(диспетчер agent-flow\)/, 'пропуск під диспетчером');
+    // Лише про змінні самого Claude Code: `$REPO` у команді теж незамінена змінна, але він не привід пропускати.
+    assert.match(takeSection, /незаміненими змінними `CLAUDE_…` чи файла скрипта немає/, 'пропуск без скрипта чи змінних');
+    assert.match(takeSection, /Код виходу `3`/);
+    assert.match(takeSection, /передай людині вивід/);
+    assert.match(takeSection, /--takeover/);
+    assert.match(takeSection, /лише за явним рішенням людини/);
+    // Перебрати можна лише свою сесію (спека, «Перебрати свою сесію»).
+    assert.doesNotMatch(takeSection, /перебрати чужу сесію/);
+    assert.match(takeSection, /інша твоя сесія/);
+    assert.match(takeSection, /Чужу сесію чи запуск Kando перебрати не можна/);
+    assert.match(takeSection, /задачу втрачено/i);
+    assert.match(takeSection, /не запускай `begin` повторно/);
+    assert.match(takeSection, /на кожному шляху зупинки після взяття/);
+    // Про takeover не кажемо «сам»: рішення завжди за людиною.
+    for (const line of takeSection.split('\n').filter(l => l.includes('--takeover'))) assert.doesNotMatch(line, /\bсам(а|і|ому)?\b/);
+
+    const endSection = s.slice(s.lastIndexOf('\n## ', end), s.indexOf('\n## ', end));
+    assert.match(endSection, /Контекст запуску \(диспетчер agent-flow\)/);
+    assert.match(endSection, /на кожному шляху зупинки після взяття/);
+
+    // Якорі мають існувати: жодних порожніх шляхів у перевірках.
+    const step0 = s.search(/^## Крок 0/m);
+    assert.ok(step0 >= 0, 'є крок 0');
+    assert.ok(begin > step0, 'begin після кроку 0');
+    const firstChange = s.search(/Постав `ai:in-progress`|--add-label|gh (issue|pr) (edit|comment|close)|Перевір кожну умову/);
+    assert.ok(firstChange >= 0, 'є зміна стану');
+    assert.ok(begin < firstChange, 'begin до першої зміни стану');
+    const stopEnd = s.indexOf('\n## Заборонено');
+    assert.ok(stopEnd >= 0, 'є «Заборонено»');
+    assert.ok(end < stopEnd, 'end перед «Заборонено»');
+    const lastStep = [...s.matchAll(/^## Крок \d+\./gm)].pop();
+    assert.ok(lastStep, 'є нумеровані кроки');
+    assert.ok(end > lastStep.index, 'end після останнього нумерованого кроку');
+
+    // Втрачена задача: end не викликати.
+    assert.match(takeSection, /`end` \*\*не виконуй\*\*/);
+    // Після «Відпустити» пуші заблоковані на всю сесію: вихід є, але рішення за людиною.
+    assert.match(takeSection, /людина прямо вирішила кинути задачу[^\n]*виконай `end`/);
+    assert.match(takeSection, /Сам цього не роби/);
+    assert.match(takeSection, /не чіпай лейбли/);
+    // Код 3 каже й про перебирання, яке не вдалось: скіл працює далі лише на результат без коду 3.
+    assert.match(takeSection, /Код виходу `3` означає, що задачу вже тримає хтось інший або перебрати її не вдалось/);
+    // Кинуту задачу лейбл не тримає, але чужий запуск він не має зрушити: це підтверджує людина.
+    if (/Постав `ai:in-progress`/.test(s)) {
+      assert.match(takeSection, /виконай `end`[^\n]*`ai:in-progress` зніми, лише якщо людина підтвердить/);
+    }
+    assert.match(endSection, /хіба що людина вирішила кинути задачу/);
+    assert.match(takeSection, /крім випадку, коли задачу втрачено/);
+    assert.match(endSection, /втрачена задача/);
+    // У реченні про умову пропуску немає літералів змінних.
+    assert.doesNotMatch(takeSection.split('\n').find(l => l.startsWith('Пропусти')), /\$\{/);
+    assert.doesNotMatch(endSection.split('\n').find(l => l.startsWith('Пропусти')), /\$\{/);
+  });
+}
+
+// Зупинки, де скіл чекає людину чи здається, — після begin; на місці зупинки має стояти «Відпустити».
+const RELEASE = 'Виконай крок «Відпустити задачу в Kando»';
+const STOP_SITES = {
+  'bug-agent': ['напиши, який саме крок не вдалося виконати й чому.', 'і 2–3 уточнювальні питання авторові. Не закривай тікет.', 'це продуктове рішення → `needs-human`.', 'Це нормальний і очікуваний результат, а не поразка.'],
+  implement: ['чим можна довести критерії.', 'Не переписуй завдання на ходу.'],
+  'pr-fix': ['Для повторного рев\'ю — `agent:go`.» і зупинись.', 'виправ або зупинись із `needs-human`.', '2–3 варіанти рішення.'],
+  merge: ['і **зупинись без дій**.'],
+};
+for (const [name, markers] of Object.entries(STOP_SITES)) {
+  test(`${name}: на кожній зупинці після begin є «Відпустити»`, () => {
+    const s = skill(name);
+    const begin = s.indexOf('kando-session" begin');
+    for (const m of markers) {
+      const i = s.indexOf(m);
+      assert.ok(i > begin && begin > 0, `маркер після begin: ${m}`);
+      assert.equal(s.split(m).length, 2, `маркер унікальний: ${m}`);
+      assert.ok(s.slice(i, i + m.length + RELEASE.length + 4).includes(RELEASE), `після «${m}» немає «Відпустити»`);
+    }
+  });
+}
+
+test('triage: begin після зупинок кроку 0б (закритий, ai:triaged, ai:in-progress, needs-human)', () => {
+  const s = skill('triage');
+  const stops = s.indexOf('- є лейбл `needs-human` і немає явної команди людини.');
+  const begin = s.indexOf('kando-session" begin');
+  const label = s.indexOf('Постав `ai:in-progress` і працюй');
+  assert.ok(stops > 0 && begin > stops && label > begin);
+});
+
+// Після kill -9 лишається ai:in-progress: нова сесія зупинилась би на лейблі ще до begin і ніколи
+// не дійшла б до --takeover.
+for (const name of ['triage', 'feature-spec', 'bug-agent']) {
+  test(`${name}: явна команда людини перебрати задачу знімає зупинку на ai:in-progress`, () => {
+    const s = skill(name);
+    const begin = s.indexOf('kando-session" begin');
+    const i = s.indexOf('Людина прямо наказала перебрати задачу');
+    assert.ok(i > 0 && i < begin, 'виняток стоїть до begin, поруч із зупинкою');
+    const para = s.slice(i, s.indexOf('\n\n', i));
+    assert.match(para, /`ai:in-progress`/);
+    assert.match(para, /`--takeover`/);
+    assert.match(para, /«закріплено» доводить, що лейбл застарілий/);
+    // no-managed, немає токена, код 3: лейбл нічим не спростовано.
+    assert.match(para, /Будь-який інший вивід цього не доводить: зупинись/);
+  });
+}
+
+test('pr-fix: перевірка закритого PR — до begin', () => {
+  const s = skill('pr-fix');
+  const closed = s.indexOf('PR закритий або змерджений');
+  const begin = s.indexOf('kando-session" begin');
+  const label = s.indexOf('Постав `ai:in-progress` на PR');
+  assert.ok(closed > 0 && begin > closed && label > begin);
+});
+
+test('скіли: нейтральні до редактора — в інших редакторах кроки пропускаються', () => {
+  for (const name of SESSION_SKILLS) {
+    assert.match(skill(name), /інший редактор/, name);
+  }
+});
+
+test('шаблони CI не викликають kando-session', () => {
+  const tpl = fs.readdirSync(path.join(__dirname, '..', 'templates'));
+  for (const f of tpl) {
+    assert.ok(!fs.readFileSync(path.join(__dirname, '..', 'templates', f), 'utf8').includes('kando-session'), f);
+  }
+});
