@@ -111,7 +111,10 @@ for (const name of SESSION_SKILLS) {
       assert.match(m[0], /крім втраченої задачі/, m[0]);
     }
     // Людина без Kando не мусить підтверджувати скрипт, що для неї нічого не робить.
-    assert.match(s.slice(0, s.indexOf('\n---', 4)), /^allowed-tools: .*kando-session/m);
+    const fm = s.slice(0, s.indexOf('\n---', 4));
+    // Виклик у скілі: "${CLAUDE_PLUGIN_ROOT}/bin/kando-session" begin — після імені може бути лапка, а не пробіл.
+    assert.match(fm, /^allowed-tools: .*Bash\(\*\/bin\/kando-session \*\)/m);
+    assert.match(fm, /^allowed-tools: .*Bash\(\*\/bin\/kando-session" \*\)/m);
     // Код 3 каже й про перебирання, яке не вдалось: скіл працює далі лише на результат без коду 3.
     assert.match(takeSection, /Код виходу `3` означає, що задачу вже тримає хтось інший або перебрати її не вдалось/);
     // Кинуту задачу лейбл не тримає, але чужий запуск він не має зрушити: це підтверджує людина.

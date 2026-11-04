@@ -1,7 +1,7 @@
 ---
 name: "pr-fix"
 description: "Доопрацьовує відкритий PR за зауваженнями людини: виправляє код, проганяє тести, пушить у гілку PR і відповідає на кожне зауваження. Використовувати, коли диспетчер agent-flow передав режим rework для PR, або коли просять «виправ PR #N за коментарями», «address review comments»."
-allowed-tools: Bash(*/bin/kando-session *)
+allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 ---
 
 # Доопрацювання PR за зауваженнями

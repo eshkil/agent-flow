@@ -1,7 +1,7 @@
 ---
 name: "implement"
 description: "Реалізує схвалену специфікацію в репозиторії поточного проєкту — покриває критерії приймання тестами, робить скріншоти (для UI) й відкриває PR. Використовувати лише для тікетів з лейблом spec:approved, зокрема коли просять «реалізуй тікет #N», «імплементуй спеку», «implement issue #N»."
-allowed-tools: Bash(*/bin/kando-session *)
+allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 ---
 
 # Імплементація схваленої фічі

@@ -1,7 +1,7 @@
 ---
 name: "feature-spec"
 description: "Досліджує запит на функціональність у репозиторії поточного проєкту і пише специфікацію з критеріями приймання та скріншотом-макетом для рецензії людини. Використовувати для тікетів type:feature після тріажу, а також коли просять «напиши специфікацію до #N», «опиши фічу», «spec for issue»."
-allowed-tools: Bash(*/bin/kando-session *)
+allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 ---
 
 # Специфікація фічі

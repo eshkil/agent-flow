@@ -1,7 +1,7 @@
 ---
 name: "merge"
 description: "Мерджить схвалений PR після повторної перевірки гейту (ai:reviewed без нових пушів, Approve людини на поточному коміті, зелений CI), видаляє гілку і закриває задачу. Використовувати лише за командою диспетчера agent-flow або коли людина прямо просить «змерджи PR #N»."
-allowed-tools: Bash(*/bin/kando-session *)
+allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 ---
 
 # Мердж схваленого PR

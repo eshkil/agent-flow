@@ -1,7 +1,7 @@
 ---
 name: "pr-review"
 description: "Рецензує PR у репозиторії поточного проєкту — перевіряє відповідність тікету, наявність доказів, регресії та конвенції проєкту, ставить лейбл ai:reviewed. Використовувати при відкритті або оновленні PR, а також коли просять «зроби рев'ю PR», «перевір PR #N», «review this PR»."
-allowed-tools: Bash(*/bin/kando-session *)
+allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 ---
 
 # Код-рев'ю

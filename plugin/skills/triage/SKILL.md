@@ -1,7 +1,7 @@
 ---
 name: "triage"
 description: "Класифікує новий тікет у репозиторії поточного проєкту (баг / фіча / інше), перевіряє повноту інформації, пропонує рішення для прогалин, шукає дублікати і виставляє лейбли. Використовувати, коли на тікеті немає лейбла ai:triaged, а також коли просять «протріажуй тікет #N», «розбери issue», «triage this issue»."
-allowed-tools: Bash(*/bin/kando-session *)
+allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 ---
 
 # Тріаж тікета
