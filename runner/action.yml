@@ -65,6 +65,12 @@ runs:
       env:
         KANDO_ENV: ${{ inputs.env }}
 
+    # Після setup: його команди можуть доставити утиліти. Збій кроку пропускає claude_install і
+    # claude, а finish передає перелік Kando.
+    - id: preflight
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/preflight.js"
+
     # Кілька runner-ів на одному сервері ділять $HOME, а дія качає Claude Code в один і той самий файл:
     # запуски, що стартували разом, псують його один одному. Кожен запуск ставить свою копію.
     # Без шляху (збій цього кроку) дія поставить Claude Code сама, як раніше.
@@ -106,3 +112,4 @@ runs:
         EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         ISSUE: ${{ steps.start.outputs.issue }}
         PR: ${{ steps.start.outputs.pr }}
+        MISSING_TOOLS: ${{ steps.preflight.outputs.missing }}
