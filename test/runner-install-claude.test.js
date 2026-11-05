@@ -29,7 +29,8 @@ function actionsTree(version = '2.1.318') {
 }
 
 // spawn встановлювача: кладе виконуваний файл у $HOME цього виклику.
-const okSpawn = calls => (cmd, args, opts) => {
+const okSpawn = (calls, out = '2.1.318 (Claude Code)\n') => (cmd, args, opts) => {
+  if (args[0] === '--version') return { status: 0, stdout: out };
   calls.push({ cmd, args, opts });
   const bin = path.join(opts.env.HOME, '.local', 'bin');
   fs.mkdirSync(bin, { recursive: true });
@@ -67,6 +68,12 @@ test('installClaude: збій — ще одна спроба, потім null', 
   const calls = [];
   const fail = (...a) => { calls.push(a); return { status: 1 }; };
   assert.equal(installClaude({ version: '2.1.318', runnerTemp: tmp(), spawn: fail, log: quiet }), null);
+  assert.equal(calls.length, 2);
+});
+
+test('installClaude: версія копії не збігається → не успіх', () => {
+  const calls = [];
+  assert.equal(installClaude({ version: '2.1.318', runnerTemp: tmp(), spawn: okSpawn(calls, '2.0.1 (Claude Code)'), log: quiet }), null);
   assert.equal(calls.length, 2);
 });
 

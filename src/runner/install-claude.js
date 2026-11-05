@@ -13,7 +13,8 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
 const ATTEMPTS = 2;
-const TIMEOUT_MS = 5 * 60e3;
+const TIMEOUT_MS = 2 * 60e3;
+const CHECK_TIMEOUT_MS = 30e3;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$/;
 
 // Версію визначає дія (`v1` рухається), тож беремо її з коду самої дії поруч із цим action.
@@ -26,6 +27,12 @@ function pinnedVersion(actionPath) {
   return m && VERSION.test(m[1]) ? m[1] : null;
 }
 
+// Копія має бути саме тієї версії, яку чекає дія.
+function hasVersion(exe, version, env, spawn) {
+  const r = spawn(exe, ['--version'], { env, encoding: 'utf8', timeout: CHECK_TIMEOUT_MS });
+  return r.status === 0 && String(r.stdout || '').includes(version);
+}
+
 function installClaude({ version, runnerTemp, spawn = spawnSync, log = console }) {
   const home = path.join(runnerTemp, 'kando-claude-home');
   const exe = path.join(home, '.local', 'bin', 'claude');
@@ -35,7 +42,7 @@ function installClaude({ version, runnerTemp, spawn = spawnSync, log = console }
   for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
     log.log(`Claude Code ${version}: окрема копія для запуску, спроба ${attempt}`);
     const r = spawn('bash', ['-c', command], { stdio: 'inherit', env, timeout: TIMEOUT_MS });
-    if (r.status === 0 && fs.existsSync(exe)) return exe;
+    if (r.status === 0 && fs.existsSync(exe) && hasVersion(exe, version, env, spawn)) return exe;
   }
   return null;
 }
@@ -43,7 +50,7 @@ function installClaude({ version, runnerTemp, spawn = spawnSync, log = console }
 function main({ env = process.env, log = console, install = installClaude } = {}) {
   const version = pinnedVersion(env.GITHUB_ACTION_PATH || '');
   if (!version) {
-    log.log('::warning::Не вдалося визначити версію Claude Code: її поставить claude-code-action');
+    log.log('::warning::Не вдалося визначити версію Claude Code (перевір шлях і формат claudeCodeVersion у claude-code-action/v1/src/entrypoints/run.ts): захист від колізії вимкнено, Claude Code поставить claude-code-action');
     return;
   }
   let exe = null;
