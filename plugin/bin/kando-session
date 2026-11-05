@@ -2,7 +2,7 @@
 # kando-session: повідомляє Kando, що ця локальна сесія Claude Code тримає задачу.
 #   kando-session begin --session <id> [--repo <owner/name>] --number <N> --skill <name> [--takeover]
 #   kando-session end --session <id>
-#   kando-session hook post-tool|pre-tool|session-end   (JSON хука — зі stdin)
+#   kando-session hook prompt|post-tool|pre-tool|session-end   (JSON хука — зі stdin)
 # Лише bash 3.2 і curl (jq може бракувати). Збої мережі скіл не зупиняють:
 # єдиний «зупиняючий» код — 3 у begin (задачу вже тримає інша сесія або перебрати її не вдалось).
 
@@ -15,6 +15,7 @@ CONF_DIR="$HOME/.config/kando"
 SDIR="$CONF_DIR/sessions"
 TOKEN_FILE="$CONF_DIR/token"
 BEAT_EVERY=60   # сигнал не частіше разу на 60 с
+REMIND_EVERY=1800   # нагадування про утримувану задачу не частіше разу на 30 хв
 # Текст для Claude, коли задачу втрачено. Нічого не пропонує робити самому:
 # begin: true перекриває кнопку «Відпустити», тож рішення за людиною. Але вихід назвати
 # треба: стан лишається, і без end пуші в цьому репо заблоковані на всю сесію.
@@ -80,7 +81,7 @@ state_put() { # id repo number skill
 }
 
 drop_state() { # id
-  rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned" "$SDIR/$1.pending" "$SDIR/$1.refused"
+  rm -f "$SDIR/$1" "$SDIR/$1.beat" "$SDIR/$1.warned" "$SDIR/$1.pending" "$SDIR/$1.refused" "$SDIR/$1.reminded"
 }
 
 # HTTP-виклик. Токен іде в curl через конфіг на stdin, а не в аргументах
@@ -160,7 +161,7 @@ cmd_begin() {
       else
         state_put "$session" "$repo" "$number" "$skill"
         date +%s > "$SDIR/$session.beat"
-        rm -f "$SDIR/$session.warned" "$SDIR/$session.pending" "$SDIR/$session.refused"
+        rm -f "$SDIR/$session.warned" "$SDIR/$session.pending" "$SDIR/$session.refused" "$SDIR/$session.reminded"
         echo "Kando: задачу #$number закріплено за цією сесією."
       fi ;;
     409)
@@ -188,7 +189,7 @@ cmd_begin() {
       # Сервер не відповів або віддав 5xx: працюємо далі, хуки спробують ще. Сигнал без begin
       # не повертає задачу після skill_done, тож .pending каже хукам повторити сам begin.
       state_put "$session" "$repo" "$number" "$skill"
-      rm -f "$SDIR/$session.beat" "$SDIR/$session.warned" "$SDIR/$session.refused"
+      rm -f "$SDIR/$session.beat" "$SDIR/$session.warned" "$SDIR/$session.refused" "$SDIR/$session.reminded"
       : > "$SDIR/$session.pending"
       echo "Kando: сервер недоступний ($RESP_STATUS), продовжую без підтвердження."
       ;;
@@ -280,6 +281,24 @@ hook_message() {
   printf '%s' "$m"
 }
 
+# Нове повідомлення людини. Перерваний скіл (Esc) не викликає end, а сигнали йдуть далі, тож задача
+# тримається, поки сесією користуються. Запитати можна лише тут. Без мережі: хук на кожне повідомлення.
+hook_prompt() {
+  hook_prepare || return 0
+  # Сервер уже відмовив: Claude про це сказано, а блокує пуші сам .refused.
+  [ -f "$STATE.refused" ] && return 0
+  local now last script
+  now=$(date +%s)
+  last=$(cat "$STATE.reminded" 2>/dev/null)
+  printf '%s' "$last" | grep -Eq '^[0-9]+$' || last=0
+  [ $((now - last)) -lt $REMIND_EVERY ] && return 0
+  echo "$now" > "$STATE.reminded"
+  script=$(sanitize "$0")
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":"Kando: ця сесія досі тримає задачу #%s у %s (скіл %s), і поки вона її тримає, ▶ Агенту на картці чекає. Якщо цей скіл зараз виконується, просто працюй далі й про це не згадуй. Якщо його перервали або людина просить про інше, спитай людину, чи відпустити задачу. Лише за її згодою виконай окремим викликом Bash: \\\"%s\\\" end --session %s і зніми ai:in-progress, якщо скіл його ставив."}}\n' \
+    "$NUMBER" "$REPO" "$SKILL" "$script" "$SESSION"
+  return 0
+}
+
 hook_post_tool() {
   hook_prepare || return 0
   [ -f "$STATE.refused" ] && return 0
@@ -351,6 +370,7 @@ case "${1:-}" in
   end) shift; cmd_end "$@"; exit 0 ;;
   hook)
     case "${2:-}" in
+      prompt) hook_prompt ;;
       post-tool) hook_post_tool ;;
       pre-tool) hook_pre_tool ;;
       session-end) hook_session_end ;;

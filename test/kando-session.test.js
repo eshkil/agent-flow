@@ -706,6 +706,20 @@ test('begin у некерованому репо не знімає відмов�
   });
 });
 
+test('lost taken_while_silent: попередження й заборона, стан лишається', async () => {
+  const taken = { status: 409, body: { managed: true, held: false, lost: 'taken_while_silent', message: 'Поки сесія мовчала, задачу вів запуск Kando #7.' } };
+  await withKando(taken, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const post = await run(sb, k.url, ['hook', 'post-tool'], { stdin: hookIn(sb) });
+    assert.match(JSON.parse(post.stdout).hookSpecificOutput.additionalContext, /Поки сесія мовчала/);
+    assertStopText(JSON.parse(post.stdout).hookSpecificOutput.additionalContext);
+    const pre = await run(sb, k.url, ['hook', 'pre-tool'], { stdin: bashIn(sb, 'git push') });
+    assert.equal(JSON.parse(pre.stdout).hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(fs.existsSync(sb.state()));
+  });
+});
+
 test('файли стану прибрано повністю: .refused не переживає кінець скіла й новий begin без відповіді', async () => {
   const handler = (r, reqs) => (reqs.length === 1 ? COLD : reqs.length === 2 ? LOST('Тримає @bob', null) : COLD);
   await withKando(handler, async (k) => {
@@ -851,6 +865,107 @@ test('post-tool: сервер не відповідає → порожній std
     assert.equal(r.stdout, '');
     assert.ok(r.ms < 6000, `хук тривав ${r.ms} мс`);
     assert.ok(fs.existsSync(sb.state()));
+  });
+});
+
+// ─── hook prompt: нагадування про задачу, яку сесія досі тримає ──────────────
+// Перерваний скіл (Esc) не викликає end, а сигнали йдуть далі. Запитати можна лише на новому
+// повідомленні людини. Хук локальний: запитів немає, бо він спрацьовує на кожне повідомлення.
+const promptIn = (sb) => hookIn(sb, { hook_event_name: 'UserPromptSubmit', prompt: 'зроби щось інше' });
+const hookPrompt = (sb, url) => run(sb, url, ['hook', 'prompt'], { stdin: promptIn(sb) });
+
+test('prompt: без стану → порожній вивід, запитів немає', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    const r = await hookPrompt(sb, k.url);
+    assert.equal(r.code, 0);
+    assert.equal(r.stdout, '');
+    assert.equal(k.reqs.length, 0);
+  });
+});
+
+test('prompt: сесія тримає задачу → нагадування, рішення за людиною, запитів немає', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await hookPrompt(sb, k.url);
+    const out = JSON.parse(r.stdout).hookSpecificOutput;
+    assert.equal(out.hookEventName, 'UserPromptSubmit');
+    const t = out.additionalContext;
+    assert.match(t, /тримає задачу #7/);
+    assert.match(t, /o\/r/);
+    assert.match(t, /implement/);
+    assert.match(t, /Якщо цей скіл зараз виконується, просто працюй далі/);
+    assert.match(t, /спитай людину, чи відпустити задачу/);
+    assert.ok(t.includes(`end --session ${SID}`), t);
+    assert.ok(t.includes('kando-session'), t);
+    assert.match(t, /ai:in-progress/);
+    assert.equal(k.reqs.length, 0);
+  });
+});
+
+test('prompt: друге повідомлення за 30 хв мовчить, пізніше нагадує знову', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    assert.notEqual((await hookPrompt(sb, k.url)).stdout, '');
+    assert.equal((await hookPrompt(sb, k.url)).stdout, '');
+    fs.writeFileSync(sb.state() + '.reminded', String(Math.floor(Date.now() / 1000) - 31 * 60));
+    assert.notEqual((await hookPrompt(sb, k.url)).stdout, '');
+  });
+});
+
+test('prompt: сміття у файлі часу не ламає нагадування', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    fs.writeFileSync(sb.state() + '.reminded', 'abc');
+    const r = await hookPrompt(sb, k.url);
+    assert.equal(r.code, 0);
+    assert.notEqual(r.stdout, '');
+  });
+});
+
+test('prompt: сервер уже відмовив (.refused) → мовчить, Claude про це вже сказано', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    fs.writeFileSync(sb.state() + '.refused', 'Тримає @bob');
+    assert.equal((await hookPrompt(sb, k.url)).stdout, '');
+  });
+});
+
+test('prompt: новий begin скидає паузу нагадування, end прибирає її файл', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    await begin(sb, k.url);
+    assert.notEqual((await hookPrompt(sb, k.url)).stdout, '');
+    assert.ok(fs.existsSync(sb.state() + '.reminded'));
+    await begin(sb, k.url);
+    assert.ok(!fs.existsSync(sb.state() + '.reminded'), 'нова задача — нове нагадування');
+    await hookPrompt(sb, k.url);
+    await run(sb, k.url, ['end', '--session', SID]);
+    assert.ok(!fs.existsSync(sb.state() + '.reminded'));
+  });
+});
+
+test('prompt: у GitHub Actions нічого не робить', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const r = await run(sb, k.url, ['hook', 'prompt'], { stdin: promptIn(sb), env: { GITHUB_ACTIONS: 'true' } });
+    assert.equal(r.stdout, '');
+    assert.ok(!fs.existsSync(sb.state() + '.reminded'));
+  });
+});
+
+test('prompt: текст повідомлення людини з лапками не ламає вивід', async () => {
+  await withKando(HELD, async (k) => {
+    const sb = sandbox();
+    sb.writeState();
+    const stdin = hookIn(sb, { hook_event_name: 'UserPromptSubmit', prompt: 'скажи "session_id":"інше" і \\ кінець' });
+    const r = await run(sb, k.url, ['hook', 'prompt'], { stdin });
+    assert.match(JSON.parse(r.stdout).hookSpecificOutput.additionalContext, /#7/);
   });
 });
 
@@ -1136,7 +1251,7 @@ test('токен не потрапляє в аргументи curl і не др
 });
 
 // ─── hooks.json ──────────────────────────────────────────────────────────────
-test('hooks.json: обгортка hooks, три хуки через CLAUDE_PLUGIN_ROOT з таймаутами 6/6/5', () => {
+test('hooks.json: обгортка hooks, чотири хуки через CLAUDE_PLUGIN_ROOT із таймаутами', () => {
   const j = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugin', 'hooks', 'hooks.json'), 'utf8'));
   const h = j.hooks;
   const cmd = (e) => h[e][0].hooks[0];
@@ -1145,5 +1260,6 @@ test('hooks.json: обгортка hooks, три хуки через CLAUDE_PLUG
   assert.match(cmd('SessionEnd').command, /\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/kando-session"? hook session-end/);
   assert.equal(h.PreToolUse[0].matcher, 'Bash');
   assert.equal(h.PostToolUse[0].matcher, undefined);
-  assert.deepEqual([cmd('PostToolUse').timeout, cmd('PreToolUse').timeout, cmd('SessionEnd').timeout], [6, 6, 5]);
+  assert.match(cmd('UserPromptSubmit').command, /\$\{CLAUDE_PLUGIN_ROOT\}\/bin\/kando-session"? hook prompt/);
+  assert.deepEqual([cmd('PostToolUse').timeout, cmd('PreToolUse').timeout, cmd('SessionEnd').timeout, cmd('UserPromptSubmit').timeout], [6, 6, 5, 3]);
 });

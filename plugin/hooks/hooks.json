@@ -3,7 +3,11 @@
     "PostToolUse": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook post-tool", "timeout": 6 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook post-tool",
+            "timeout": 6
+          }
         ]
       }
     ],
@@ -11,14 +15,33 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook pre-tool", "timeout": 6 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook pre-tool",
+            "timeout": 6
+          }
         ]
       }
     ],
     "SessionEnd": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook session-end", "timeout": 5 }
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook session-end",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/kando-session\" hook prompt",
+            "timeout": 3
+          }
         ]
       }
     ]
