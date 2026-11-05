@@ -157,3 +157,10 @@ test('action.yml: крок preflight без умови always — його зб�
   const step = actionYml.slice(actionYml.indexOf('- id: preflight\n'), actionYml.indexOf('- id: claude_install\n'));
   assert.doesNotMatch(step, /if:|continue-on-error/);
 });
+
+test('кроки до preflight (start, files, heartbeat) не викликають gh — відсутній gh не обриває їх раніше', () => {
+  for (const f of ['start.js', 'files.js', 'heartbeat.js']) {
+    const src = fs.readFileSync(path.join(ROOT, 'src', 'runner', f), 'utf8');
+    assert.doesNotMatch(src, /(spawn|exec)\w*\(\s*['"`]gh['"`]/, f);
+  }
+});

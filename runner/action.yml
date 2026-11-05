@@ -66,7 +66,9 @@ runs:
         KANDO_ENV: ${{ inputs.env }}
 
     # Після setup: його команди можуть доставити утиліти. Збій кроку пропускає claude_install і
-    # claude, а finish передає перелік Kando.
+    # claude, а finish передає перелік Kando. Кроки до нього (start, heartbeat, files) gh не
+    # викликають — start ходить у Kando через fetch, — тож відсутній gh не обриває їх раніше
+    # за preflight, і перелік завжди доходить до finish.
     - id: preflight
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/preflight.js"
