@@ -65,9 +65,17 @@ runs:
       env:
         KANDO_ENV: ${{ inputs.env }}
 
+    # Кілька runner-ів на одному сервері ділять $HOME, а дія качає Claude Code в один і той самий файл:
+    # запуски, що стартували разом, псують його один одному. Кожен запуск ставить свою копію.
+    # Без шляху (збій цього кроку) дія поставить Claude Code сама, як раніше.
+    - id: claude_install
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/install-claude.js"
+
     - id: claude
       uses: anthropics/claude-code-action@v1
       with:
+        path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
         prompt: ${{ steps.start.outputs.prompt }}
         claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
         anthropic_api_key: ${{ inputs.anthropic_api_key }}
