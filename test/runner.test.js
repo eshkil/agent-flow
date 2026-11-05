@@ -295,6 +295,28 @@ test('finish: success ігнорує журнал ліміту; skipped → fail
   assert.equal(outcomeOf('cancelled'), 'cancelled');
 });
 
+test('finish: перелік утиліт із preflight → у тілі /finish масив missing і runner_os', async () => {
+  const env = baseEnv(tmp(), { CLAUDE_OUTCOME: 'skipped', MISSING_TOOLS: 'gh unzip', RUNNER_OS: 'Linux' });
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'failed' }) } });
+  const { body } = await finish({ env, fetchImpl: f, log: silent });
+  const sent = f.calls.find(c => c.url.endsWith('/finish')).body;
+  assert.equal(sent.outcome, 'failure');
+  assert.deepEqual(sent.missing, ['gh', 'unzip']);
+  assert.equal(sent.runner_os, 'Linux');
+  assert.deepEqual(body, sent);
+});
+
+test('finish: порожній чи відсутній перелік утиліт → без полів missing і runner_os', async () => {
+  for (const extra of [{}, { MISSING_TOOLS: '' }, { MISSING_TOOLS: '  ' }]) {
+    const env = baseEnv(tmp(), { CLAUDE_OUTCOME: 'success', RUNNER_OS: 'Linux', ...extra });
+    const f = fakeFetch({ routes: { '/finish': json(200, { status: 'succeeded' }) } });
+    await finish({ env, fetchImpl: f, log: silent });
+    const sent = f.calls.find(c => c.url.endsWith('/finish')).body;
+    assert.ok(!('missing' in sent), JSON.stringify(extra));
+    assert.ok(!('runner_os' in sent), JSON.stringify(extra));
+  }
+});
+
 test('finish: кладе stop-файл для heartbeat раніше, ніж іде в мережу', async () => {
   const dir = tmp();
   const env = baseEnv(dir, { CLAUDE_OUTCOME: 'success' });
