@@ -41,7 +41,11 @@ async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, l
   const numbers = [...new Set([env.ISSUE, env.PR].map(Number).filter(n => Number.isInteger(n) && n > 0))];
   const stuck = await isStuck({ env, numbers, fetchImpl, log });
 
+  // Перелік із кроку preflight: причину з командою встановлення будує Kando.
+  const missing = (env.MISSING_TOOLS || '').split(/\s+/).filter(Boolean);
+
   const body = { outcome, limit: { limited: limit.limited, until: limit.until ? limit.until.toISOString() : null }, stuck };
+  if (missing.length) Object.assign(body, { missing, runner_os: env.RUNNER_OS });
   // Перший токен — одразу: без змінних Actions повторювати нема чого. Далі кожна
   // спроба бере новий (OIDC-токен живе кілька хвилин, а повтори — до 10 хв).
   let first = await oidcToken(env, fetchImpl);
@@ -51,7 +55,7 @@ async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, l
     return t;
   };
   const res = await call(env.KANDO_URL, `/api/agent/runs/${env.KANDO_RUN_ID}/finish`, body, { oidc, fetchImpl, sleep, delays });
-  log.log(`Kando: підсумок ${outcome}${stuck ? ' (завис ai:in-progress)' : ''}${limit.limited ? ' (ліміт Claude)' : ''} → ${res.status}`);
+  log.log(`Kando: підсумок ${outcome}${stuck ? ' (завис ai:in-progress)' : ''}${limit.limited ? ' (ліміт Claude)' : ''}${missing.length ? ` (немає утиліт: ${missing.join(', ')})` : ''} → ${res.status}`);
   return { body, res };
 }
 
