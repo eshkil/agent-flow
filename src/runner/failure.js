@@ -10,6 +10,9 @@ const { paths } = require('./kando');
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 const MAX_LINE = 500;
 const MAX_PARTIAL = 8192;
+// Kando зберігає звіт ≤ 48 КБ; більший запит HTTP-парсер відхилив би цілком (413),
+// і разом зі звітом пропав би підсумок запуску.
+const MAX_BYTES = 48 * 1024;
 
 const failurePath = env => path.join(paths(env).dir, 'failure.json');
 
@@ -38,6 +41,16 @@ function writeFailure(env, report) {
     throw e;
   }
   return true;
+}
+
+// Звіт у межах max байт (UTF-8, після серіалізації): найстаріші рядки tail
+// відкидаються, найновіші — поруч зі збоєм — лишаються. Вхід не змінюється.
+function fitFailure(failure, max = MAX_BYTES) {
+  if (!Array.isArray(failure.tail)) return failure;
+  const tail = failure.tail.slice();
+  const size = () => Buffer.byteLength(JSON.stringify({ ...failure, tail }), 'utf8');
+  while (tail.length && size() > max) tail.shift();
+  return { ...failure, tail };
 }
 
 // Останні max рядків виводу. Кожен потік (stdout, stderr) має свій декодер і свій
@@ -89,4 +102,4 @@ function tailBuffer(max = 150) {
   };
 }
 
-module.exports = { failurePath, writeFailure, tailBuffer };
+module.exports = { failurePath, writeFailure, fitFailure, tailBuffer };

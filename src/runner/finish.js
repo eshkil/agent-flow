@@ -3,7 +3,7 @@
 
 const fs = require('node:fs');
 const { detectLimit, readMessages } = require('../limit');
-const { failurePath } = require('./failure');
+const { failurePath, fitFailure } = require('./failure');
 const { secretsFrom, mask } = require('./mask');
 const { paths, oidcToken, call, KandoError, FINISH_DELAYS } = require('./kando');
 
@@ -65,7 +65,8 @@ async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, l
   if (missing.length) Object.assign(body, { missing, runner_os: env.RUNNER_OS });
   if (outcome === 'failure') {
     const failure = readFailure(env);
-    if (failure) body.failure = failure;
+    // Після маскування: у межах ліміту Kando, щоб великий tail не зламав увесь /finish.
+    if (failure) body.failure = fitFailure(failure);
   }
   // Перший токен — одразу: без змінних Actions повторювати нема чого. Далі кожна
   // спроба бере новий (OIDC-токен живе кілька хвилин, а повтори — до 10 хв).

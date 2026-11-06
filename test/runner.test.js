@@ -418,7 +418,7 @@ test('runSetup: кожен рядок окремо через bash -e; перш�
     const p = new EventEmitter();
     p.stdout = new EventEmitter();
     p.stderr = new EventEmitter();
-    setImmediate(() => p.emit('close', args[2] === 'bad' ? 3 : 0, null));
+    setImmediate(() => p.emit('exit', args[2] === 'bad' ? 3 : 0, null));
     return p;
   };
   const sink = { write: () => true };
@@ -556,4 +556,18 @@ test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup'
   assert.ok(step('finish').includes('KANDO_MASK_FILES: ${{ inputs.files }}'));
   assert.ok(!step('setup').includes('KANDO_MASK_'));
   assert.equal(actionYml.split('KANDO_MASK_').length - 1, 3);
+});
+
+test('finish: великий кириличний tail урізано до 48 КБ з початку, найновіші рядки лишаються', async () => {
+  const dir = tmp();
+  const tail = Array.from({ length: 150 }, (_, i) => `${String(i).padStart(3, '0')} ${'я'.repeat(496)}`);
+  writeFailureFile(dir, { ...sampleFailure, tail });
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'failed' }) } });
+  await finish({ env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure' }), fetchImpl: f, log: silent });
+  const sent = f.calls.find(c => c.url.endsWith('/finish')).body.failure;
+  assert.ok(Buffer.byteLength(JSON.stringify(sent), 'utf8') <= 48 * 1024);
+  assert.ok(sent.tail.length > 0 && sent.tail.length < 150);
+  assert.deepEqual(sent.tail, tail.slice(-sent.tail.length));
+  assert.equal(sent.stage, 'setup');
+  assert.equal(sent.command, 'make');
 });
