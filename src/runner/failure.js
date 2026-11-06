@@ -50,7 +50,8 @@ function writeFailure(env, report) {
 function tailBuffer(max = 150) {
   const done = [];
   const clean = raw => {
-    const text = raw.replace(ANSI, '');
+    // Кінцевий \r — частина CRLF, а не прогрес: спершу знімаємо його.
+    const text = raw.replace(ANSI, '').replace(/\r+$/, '');
     return text.slice(text.lastIndexOf('\r') + 1);
   };
   const keep = raw => {
@@ -68,7 +69,7 @@ function tailBuffer(max = 150) {
         partial = parts.pop().slice(-MAX_PARTIAL);
         parts.forEach(keep);
       },
-      partial: () => partial + dec.end(),
+      partial: () => partial, // без dec.end(): повторний lines() не псує стан декодера
     };
   };
   const streams = [];

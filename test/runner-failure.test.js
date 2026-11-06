@@ -137,3 +137,12 @@ test('runSetup: збій запису failure.json не підміняє пом�
   const sk = sink();
   await assert.rejects(runSetup({ envJson: '{"setup":["exit 2"]}', out: sk, err: sk, env }), /«exit 2» завершилась з кодом 2/);
 });
+
+test('tailBuffer: CRLF-рядки не стають порожніми', () => {
+  const t = tailBuffer();
+  t.push('foo\r\nbar\r\n');
+  assert.deepEqual(t.lines(), ['foo', 'bar']);
+  const t2 = tailBuffer();
+  t2.push('10%\r20%\r\n');
+  assert.deepEqual(t2.lines(), ['20%']);
+});
