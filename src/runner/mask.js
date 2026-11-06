@@ -43,9 +43,21 @@ function secretsFrom(env) {
   return [...new Set(out.filter(v => typeof v === 'string').map(v => v.trim()).filter(Boolean))];
 }
 
+// Рядок у звіті вже обрізано до 500 символів, тож секрет на межі лишається лише
+// префіксом, який точне співпадіння не ловить. Маскуємо кінець рядка, якщо це
+// початок секрету довжиною від MIN_FILE_LINE.
+function maskCutPrefix(out, v) {
+  for (let k = Math.min(v.length - 1, out.length); k >= MIN_FILE_LINE; k--) {
+    if (out.endsWith(v.slice(0, k))) return out.slice(0, out.length - k) + '***';
+  }
+  return out;
+}
+
 function mask(s, secrets = []) {
   let out = String(s);
-  for (const v of [...secrets].filter(x => x && x.trim()).sort((a, b) => b.length - a.length)) out = out.split(v).join('***');
+  for (const v of [...secrets].filter(x => x && x.trim()).sort((a, b) => b.length - a.length)) {
+    out = maskCutPrefix(out.split(v).join('***'), v);
+  }
   for (const re of TOKEN_PATTERNS) out = out.replace(re, '***');
   return out;
 }

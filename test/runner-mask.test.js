@@ -41,3 +41,11 @@ test('secretsFrom: битий KANDO_MASK_FILES → без файлових зн�
   const s = secretsFrom({ RUNNER_TEMP: tmp(), KANDO_MASK_CLAUDE_TOKEN: 'claude-secret', KANDO_MASK_FILES: '{not json' });
   assert.deepEqual(s, ['claude-secret']);
 });
+
+test('mask: префікс секрету, обрізаного на межі рядка, теж маскується', () => {
+  const secret = 'S3CRET-token-value-0123456789';
+  const line = ('x'.repeat(490) + secret).slice(0, 500);   // у рядок влізло лише 10 символів секрету
+  const out = mask(line, [secret]);
+  assert.equal(out, 'x'.repeat(490) + '***');
+  assert.equal(mask('x'.repeat(495) + 'S3CRE', [secret]), 'x'.repeat(495) + 'S3CRE', 'коротше 8 — не чіпаємо');
+});

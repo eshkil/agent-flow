@@ -87,6 +87,8 @@ function tailBuffer(max = 150) {
       push(chunk) {
         const parts = (partial + (typeof chunk === 'string' ? chunk : dec.write(chunk))).split('\n');
         partial = parts.pop().slice(-MAX_PARTIAL);
+        // Зріз з кінця міг почати рядок з другої половини сурогатної пари.
+        if (/^[\uDC00-\uDFFF]/.test(partial)) partial = partial.slice(1);
         parts.forEach(keep);
       },
       partial: () => partial, // без dec.end(): повторний lines() не псує стан декодера
