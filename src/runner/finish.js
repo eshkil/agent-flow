@@ -3,6 +3,8 @@
 
 const fs = require('node:fs');
 const { detectLimit, readMessages } = require('../limit');
+const { failurePath } = require('./failure');
+const { secretsFrom, mask } = require('./mask');
 const { paths, oidcToken, call, KandoError, FINISH_DELAYS } = require('./kando');
 
 // steps.claude.outcome: success | failure | cancelled | skipped.
@@ -30,6 +32,21 @@ async function isStuck({ env, numbers, fetchImpl = fetch, log = console }) {
   return false;
 }
 
+// Звіт про збій кроку раннера (failure.json), замаскований. Немає файла чи він битий —
+// null: /finish піде без поля. Вміст ніколи не логуємо.
+function readFailure(env) {
+  try {
+    const raw = fs.readFileSync(failurePath(env), 'utf8');
+    const report = JSON.parse(raw);
+    if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+    // Маскуємо значення, а не сирий JSON: шаблон Authorization забирає рядок до кінця
+    // і зламав би розмітку.
+    const secrets = secretsFrom(env);
+    const walk = v => typeof v === 'string' ? mask(v, secrets) : Array.isArray(v) ? v.map(walk) : v;
+    return Object.fromEntries(Object.entries(report).map(([k, v]) => [k, walk(v)]));
+  } catch { return null; }
+}
+
 async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, log = console }) {
   const p = paths(env);
   // Спершу зупиняємо heartbeat: після /finish він отримав би лише 409.
@@ -46,6 +63,10 @@ async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, l
 
   const body = { outcome, limit: { limited: limit.limited, until: limit.until ? limit.until.toISOString() : null }, stuck };
   if (missing.length) Object.assign(body, { missing, runner_os: env.RUNNER_OS });
+  if (outcome === 'failure') {
+    const failure = readFailure(env);
+    if (failure) body.failure = failure;
+  }
   // Перший токен — одразу: без змінних Actions повторювати нема чого. Далі кожна
   // спроба бере новий (OIDC-токен живе кілька хвилин, а повтори — до 10 хв).
   let first = await oidcToken(env, fetchImpl);
