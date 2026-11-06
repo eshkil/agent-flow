@@ -6,6 +6,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { writeFailure } = require('./failure');
 
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 
@@ -122,6 +123,8 @@ if (require.main === module) {
     const written = writeFiles(process.env.KANDO_FILES_JSON, process.env.GITHUB_WORKSPACE || process.cwd());
     for (const p of written) console.log(`files: записано ${p}`);
   } catch (e) {
+    // Повідомлення вже безпечне (без вмісту секрету), тож іде в звіт як є.
+    try { writeFailure(process.env, { stage: 'files', command: null, exit_code: null, tail: [e.message] }); } catch { /* звіт не важливіший за сам збій */ }
     console.error(`::error::${e.message}`);
     process.exit(1);
   }

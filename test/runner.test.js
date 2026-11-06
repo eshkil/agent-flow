@@ -410,10 +410,20 @@ test('setupCommands: масив, один рядок, порожнє й неко
   assert.throws(() => setupCommands('{oops'), /JSON/);
 });
 
-test('runSetup: кожен рядок окремо через bash -e; перша невдача зупиняє', () => {
+test('runSetup: кожен рядок окремо через bash -e; перша невдача зупиняє', async () => {
+  const { EventEmitter } = require('node:events');
   const seen = [];
-  const spawn = (cmd, args) => { seen.push([cmd, ...args]); return { status: args[2] === 'bad' ? 3 : 0 }; };
-  assert.throws(() => runSetup({ envJson: '{"setup":["ok","bad","never"]}', spawn, log: silent }), /«bad».*3/);
+  const spawn = (cmd, args) => {
+    seen.push([cmd, ...args]);
+    const p = new EventEmitter();
+    p.stdout = new EventEmitter();
+    p.stderr = new EventEmitter();
+    setImmediate(() => p.emit('exit', args[2] === 'bad' ? 3 : 0, null));
+    return p;
+  };
+  const sink = { write: () => true };
+  const env = { RUNNER_TEMP: tmp() };
+  await assert.rejects(runSetup({ envJson: '{"setup":["ok","bad","never"]}', spawn, out: sink, err: sink, env }), /«bad».*3/);
   assert.deepEqual(seen, [['bash', '-e', '-c', 'ok'], ['bash', '-e', '-c', 'bad']]);
 });
 
@@ -495,4 +505,69 @@ test('git-credential-kando: чужий хост, store/erase і відсутні
   assert.equal(cred('store', 'protocol=https\nhost=github.com\npassword=x\n\n', env).stdout, '');
   assert.equal(cred('erase', 'protocol=https\nhost=github.com\n\n', env).stdout, '');
   assert.equal(cred('get', 'protocol=https\nhost=github.com\n\n', { KANDO_TOKEN_FILE: path.join(root, 'none') }).stdout, '');
+});
+
+// ─── finish: звіт про збій ───────────────────────────────────────────────────
+const writeFailureFile = (dir, content) => {
+  fs.mkdirSync(path.join(dir, 'kando'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'kando', 'failure.json'), typeof content === 'string' ? content : JSON.stringify(content));
+};
+const sampleFailure = { stage: 'setup', command: 'make', exit_code: 2, runner_os: 'Linux', runner_arch: 'ARM64', tail: ['Authorization: Bearer x', 'token ghs_abc123 here', 'ok'] };
+
+test('finish: outcome failure і failure.json → body.failure із замаскованим tail', async () => {
+  const dir = tmp();
+  writeFailureFile(dir, sampleFailure);
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'failed' }) } });
+  await finish({ env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure' }), fetchImpl: f, log: silent });
+  const sent = f.calls.find(c => c.url.endsWith('/finish')).body;
+  assert.deepEqual(sent.failure, { ...sampleFailure, tail: ['***', 'token *** here', 'ok'] });
+});
+
+test('finish: секрет із KANDO_MASK_* маскується у failure', async () => {
+  const dir = tmp();
+  writeFailureFile(dir, { ...sampleFailure, tail: ['key=sup3r-secret-key'] });
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'failed' }) } });
+  await finish({ env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure', KANDO_MASK_API_KEY: 'sup3r-secret-key' }), fetchImpl: f, log: silent });
+  assert.deepEqual(f.calls.find(c => c.url.endsWith('/finish')).body.failure.tail, ['key=***']);
+});
+
+test('finish: outcome success → без failure, навіть якщо файл є', async () => {
+  const dir = tmp();
+  writeFailureFile(dir, sampleFailure);
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'succeeded' }) } });
+  await finish({ env: baseEnv(dir, { CLAUDE_OUTCOME: 'success' }), fetchImpl: f, log: silent });
+  assert.ok(!('failure' in f.calls.find(c => c.url.endsWith('/finish')).body));
+});
+
+test('finish: битий failure.json → без failure, /finish надіслано', async () => {
+  const dir = tmp();
+  writeFailureFile(dir, '{broken');
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'failed' }) } });
+  await finish({ env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure' }), fetchImpl: f, log: silent });
+  const sent = f.calls.find(c => c.url.endsWith('/finish')).body;
+  assert.equal(sent.outcome, 'failure');
+  assert.ok(!('failure' in sent));
+});
+
+test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup', () => {
+  const step = id => actionYml.split(/\n    - id: /).find(b => b.startsWith(id + '\n'));
+  assert.ok(step('finish').includes('KANDO_MASK_CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_API_KEY: ${{ inputs.anthropic_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_FILES: ${{ inputs.files }}'));
+  assert.ok(!step('setup').includes('KANDO_MASK_'));
+  assert.equal(actionYml.split('KANDO_MASK_').length - 1, 3);
+});
+
+test('finish: великий кириличний tail урізано до 48 КБ з початку, найновіші рядки лишаються', async () => {
+  const dir = tmp();
+  const tail = Array.from({ length: 150 }, (_, i) => `${String(i).padStart(3, '0')} ${'я'.repeat(496)}`);
+  writeFailureFile(dir, { ...sampleFailure, tail });
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'failed' }) } });
+  await finish({ env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure' }), fetchImpl: f, log: silent });
+  const sent = f.calls.find(c => c.url.endsWith('/finish')).body.failure;
+  assert.ok(Buffer.byteLength(JSON.stringify(sent), 'utf8') <= 48 * 1024);
+  assert.ok(sent.tail.length > 0 && sent.tail.length < 150);
+  assert.deepEqual(sent.tail, tail.slice(-sent.tail.length));
+  assert.equal(sent.stage, 'setup');
+  assert.equal(sent.command, 'make');
 });
