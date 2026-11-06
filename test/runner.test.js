@@ -410,10 +410,20 @@ test('setupCommands: масив, один рядок, порожнє й неко
   assert.throws(() => setupCommands('{oops'), /JSON/);
 });
 
-test('runSetup: кожен рядок окремо через bash -e; перша невдача зупиняє', () => {
+test('runSetup: кожен рядок окремо через bash -e; перша невдача зупиняє', async () => {
+  const { EventEmitter } = require('node:events');
   const seen = [];
-  const spawn = (cmd, args) => { seen.push([cmd, ...args]); return { status: args[2] === 'bad' ? 3 : 0 }; };
-  assert.throws(() => runSetup({ envJson: '{"setup":["ok","bad","never"]}', spawn, log: silent }), /«bad».*3/);
+  const spawn = (cmd, args) => {
+    seen.push([cmd, ...args]);
+    const p = new EventEmitter();
+    p.stdout = new EventEmitter();
+    p.stderr = new EventEmitter();
+    setImmediate(() => p.emit('close', args[2] === 'bad' ? 3 : 0, null));
+    return p;
+  };
+  const sink = { write: () => true };
+  const env = { RUNNER_TEMP: tmp() };
+  await assert.rejects(runSetup({ envJson: '{"setup":["ok","bad","never"]}', spawn, out: sink, err: sink, env }), /«bad».*3/);
   assert.deepEqual(seen, [['bash', '-e', '-c', 'ok'], ['bash', '-e', '-c', 'bad']]);
 });
 
