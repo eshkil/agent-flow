@@ -16,7 +16,14 @@ const MAX_BYTES = 48 * 1024;
 
 const failurePath = env => path.join(paths(env).dir, 'failure.json');
 
-const cap = x => String(x).slice(0, MAX_LINE);
+// Обрізаємо за UTF-16, але не посеред сурогатної пари: інакше емодзі на межі
+// стане битим символом.
+function cut(text, max) {
+  if (text.length <= max) return text;
+  const end = /[\uD800-\uDBFF]/.test(text[max - 1]) ? max - 1 : max;
+  return text.slice(0, end);
+}
+const cap = x => cut(String(x), MAX_LINE);
 
 // Kando відкидає звіт цілком, якщо поле вийшло за ліміт, тож зводимо все до меж:
 // exit_code — число або рядок ≤ 20, command і рядки tail — ≤ 500.
@@ -70,7 +77,7 @@ function tailBuffer(max = 150) {
   const keep = raw => {
     const line = clean(raw);
     if (line.startsWith('::')) return;
-    done.push(line.slice(0, MAX_LINE));
+    done.push(cut(line, MAX_LINE));
     if (done.length > max) done.shift();
   };
   const stream = () => {
@@ -95,7 +102,7 @@ function tailBuffer(max = 150) {
       const all = done.slice();
       for (const s of streams) {
         const line = clean(s.partial());
-        if (line && !line.startsWith('::')) all.push(line.slice(0, MAX_LINE));
+        if (line && !line.startsWith('::')) all.push(cut(line, MAX_LINE));
       }
       return all.slice(-max);
     },

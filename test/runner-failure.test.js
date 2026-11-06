@@ -209,3 +209,12 @@ test('runSetup: дочірній bash не успадковує перехопл
   assert.equal(text.split('inner').length - 1, 1, text);
   assert.match(text, /env=\[\]/);
 });
+
+test('обрізання до 500 не розрізає емодзі на межі', () => {
+  const line = 'x'.repeat(499) + '😀' + 'tail';
+  const t = tailBuffer();
+  t.push(line + '\n');
+  const [got] = t.lines();
+  assert.equal(got, 'x'.repeat(499));
+  assert.ok(!/[\uD800-\uDBFF]$/.test(got));
+});
