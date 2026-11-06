@@ -115,3 +115,7 @@ runs:
         ISSUE: ${{ steps.start.outputs.issue }}
         PR: ${{ steps.start.outputs.pr }}
         MISSING_TOOLS: ${{ steps.preflight.outputs.missing }}
+        # Секрети лише для маскування звіту про збій; кроки setup/files їх не отримують.
+        KANDO_MASK_CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
+        KANDO_MASK_API_KEY: ${{ inputs.anthropic_api_key }}
+        KANDO_MASK_FILES: ${{ inputs.files }}

@@ -244,3 +244,20 @@ test('шаблон kando-agent.yml передає секрет KANDO_FILES у in
   assert.ok(t.includes('files: ${{ secrets.KANDO_FILES }}'));
   assert.ok(t.indexOf('anthropic_api_key:') < t.indexOf('files: ${{ secrets.KANDO_FILES }}'));
 });
+
+test('files.js: збій пише failure.json зі stage files без вмісту секрету', () => {
+  const root = tmp(), temp = tmp();
+  const secret = 'SUPERSECRET-not-json';
+  const r = spawnSync(process.execPath, [FILES_JS], {
+    encoding: 'utf8',
+    env: { PATH: process.env.PATH, GITHUB_WORKSPACE: root, RUNNER_TEMP: temp, RUNNER_OS: 'Linux', RUNNER_ARCH: 'X64', KANDO_FILES_JSON: secret },
+  });
+  assert.equal(r.status, 1);
+  const raw = fs.readFileSync(path.join(temp, 'kando', 'failure.json'), 'utf8');
+  const f = JSON.parse(raw);
+  assert.equal(f.stage, 'files');
+  assert.equal(f.command, null);
+  assert.equal(f.exit_code, null);
+  assert.equal(f.tail.length, 1);
+  assert.ok(!raw.includes(secret));
+});
