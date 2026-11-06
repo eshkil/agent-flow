@@ -17,9 +17,11 @@ function runOne(spawn, line, out, err) {
   return new Promise(resolve => {
     const tail = tailBuffer();
     const p = spawn('bash', ['-e', '-c', line], { stdio: ['inherit', 'pipe', 'pipe'] });
-    p.stdout.on('data', c => { out.write(c); tail.push(c); });
-    p.stderr.on('data', c => { err.write(c); tail.push(c); });
-    p.on('error', e => resolve({ code: null, signal: e.message, tail: tail.lines() }));
+    const so = tail.stream(), se = tail.stream();
+    p.stdout.on('data', c => { out.write(c); so.push(c); });
+    p.stderr.on('data', c => { err.write(c); se.push(c); });
+    // Не вдалося запустити (ENOENT тощо): короткий код — в exit_code, повне повідомлення — в tail.
+    p.on('error', e => { tail.push(`${e.message}\n`); resolve({ code: null, signal: e.code || 'error', tail: tail.lines() }); });
     p.on('close', (code, signal) => resolve({ code, signal, tail: tail.lines() }));
   });
 }
@@ -31,7 +33,8 @@ async function runSetup({ envJson, spawn = nodeSpawn, out = process.stdout, err 
     out.write('::endgroup::\n');
     if (r.code !== 0) {
       const code = r.code ?? r.signal;
-      writeFailure(env, { stage: 'setup', command: line, exit_code: code, tail: r.tail });
+      // Збій запису звіту не має підміняти справжню помилку setup.
+      try { writeFailure(env, { stage: 'setup', command: line, exit_code: code, tail: r.tail }); } catch { /* звіт не важливіший за сам збій */ }
       throw new Error(`setup: «${line}» завершилась з кодом ${code}`);
     }
   }

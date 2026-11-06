@@ -74,3 +74,66 @@ test('runSetup: успіх не створює failure.json', async () => {
   await runSetup({ envJson: '{"setup":["echo hi"]}', out: sink(), err: sink(), env });
   assert.equal(fs.existsSync(failurePath(env)), false);
 });
+
+test('writeFailure: command > 500 і довгий tail-рядок обрізаються, exit_code ≤ 20', () => {
+  const env = { RUNNER_TEMP: tmp() };
+  writeFailure(env, { stage: 'setup', command: 'c'.repeat(600), exit_code: 'E'.repeat(40), tail: ['t'.repeat(700)] });
+  const f = JSON.parse(fs.readFileSync(failurePath(env), 'utf8'));
+  assert.equal(f.command.length, 500);
+  assert.equal(f.exit_code.length, 20);
+  assert.equal(f.tail[0].length, 500);
+});
+
+test('tailBuffer: кириличний символ, розрізаний між шматками, лишається цілим', () => {
+  const t = tailBuffer();
+  const b = Buffer.from('привіт\n');
+  t.push(b.subarray(0, 3));
+  t.push(b.subarray(3));
+  assert.deepEqual(t.lines(), ['привіт']);
+});
+
+test('tailBuffer: \\r-прогрес лишає текст після останнього \\r (і в незавершеному рядку)', () => {
+  const t = tailBuffer();
+  t.push('10%\r20%\r30%\n40%\r50%');
+  assert.deepEqual(t.lines(), ['30%', '50%']);
+});
+
+test('tailBuffer: незавершені рядки stdout і stderr не склеюються', () => {
+  const t = tailBuffer();
+  const so = t.stream(), se = t.stream();
+  so.push('out-part');
+  se.push('err-line\n');
+  so.push('-end\n');
+  assert.deepEqual(t.lines(), ['err-line', 'out-part-end']);
+});
+
+test('tailBuffer: величезний рядок без \\n обмежено', () => {
+  const t = tailBuffer();
+  t.push('x'.repeat(100000));
+  t.push('y'.repeat(100000));
+  assert.equal(t.lines()[0].length, 500);
+});
+
+test('runSetup: помилка запуску дає exit_code ENOENT (≤ 20), повне повідомлення в tail', async () => {
+  const { EventEmitter } = require('node:events');
+  const env = { RUNNER_TEMP: tmp() };
+  const spawn = () => {
+    const p = new EventEmitter();
+    p.stdout = new EventEmitter(); p.stderr = new EventEmitter();
+    setImmediate(() => p.emit('error', Object.assign(new Error('spawn bash ENOENT: no such file ' + 'z'.repeat(50)), { code: 'ENOENT' })));
+    return p;
+  };
+  const sk = sink();
+  await assert.rejects(runSetup({ envJson: '{"setup":["x"]}', spawn, out: sk, err: sk, env }), /завершилась з кодом ENOENT/);
+  const f = JSON.parse(fs.readFileSync(failurePath(env), 'utf8'));
+  assert.equal(f.exit_code, 'ENOENT');
+  assert.match(f.tail.join('\n'), /no such file/);
+});
+
+test('runSetup: збій запису failure.json не підміняє помилку setup', async () => {
+  const blocker = path.join(tmp(), 'file');
+  fs.writeFileSync(blocker, 'x');
+  const env = { RUNNER_TEMP: blocker }; // mkdir під файлом -> ENOTDIR
+  const sk = sink();
+  await assert.rejects(runSetup({ envJson: '{"setup":["exit 2"]}', out: sk, err: sk, env }), /«exit 2» завершилась з кодом 2/);
+});

@@ -4,18 +4,33 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { StringDecoder } = require('node:string_decoder');
 const { paths } = require('./kando');
 
 const ANSI = /\x1b\[[0-9;]*[A-Za-z]/g;
 const MAX_LINE = 500;
+const MAX_PARTIAL = 8192;
 
 const failurePath = env => path.join(paths(env).dir, 'failure.json');
 
+const cap = x => String(x).slice(0, MAX_LINE);
+
+// Kando відкидає звіт цілком, якщо поле вийшло за ліміт, тож зводимо все до меж:
+// exit_code — число або рядок ≤ 20, command і рядки tail — ≤ 500.
+function normalize({ stage, command, exit_code, tail }) {
+  return {
+    stage,
+    command: command == null ? null : cap(command),
+    exit_code: exit_code == null ? null : typeof exit_code === 'number' ? exit_code : String(exit_code).slice(0, 20),
+    tail: (tail || []).map(cap),
+  };
+}
+
 // → true, якщо записали; false, якщо звіт уже є.
-function writeFailure(env, { stage, command, exit_code, tail }) {
+function writeFailure(env, report) {
   const file = failurePath(env);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  const body = { stage, command, exit_code, tail, runner_os: env.RUNNER_OS, runner_arch: env.RUNNER_ARCH };
+  const body = { ...normalize(report), runner_os: env.RUNNER_OS, runner_arch: env.RUNNER_ARCH };
   try {
     fs.writeFileSync(file, JSON.stringify(body), { flag: 'wx', mode: 0o600 });
   } catch (e) {
@@ -25,28 +40,49 @@ function writeFailure(env, { stage, command, exit_code, tail }) {
   return true;
 }
 
-// Останні max рядків виводу: шматки склеюються за \n, ANSI знімається, службові
-// команди Actions (`::…`) не беремо, довгі рядки обрізаємо.
+// Останні max рядків виводу. Кожен потік (stdout, stderr) має свій декодер і свій
+// незавершений рядок, тож недописаний рядок одного потоку не склеюється з іншим, а
+// кириличний символ, розрізаний між шматками, лишається цілим. Завершені рядки
+// йдуть у спільний список у порядку надходження. ANSI знімається, службові команди
+// Actions (`::…`) пропускаються, `\r`-прогрес лишає текст після останнього `\r`,
+// довгі рядки обрізаються до 500, а незавершений — до 8 КБ ще в буфері.
+// `push` — потік за замовчуванням; `stream()` дає окремий.
 function tailBuffer(max = 150) {
   const done = [];
-  let partial = '';
+  const clean = raw => {
+    const text = raw.replace(ANSI, '');
+    return text.slice(text.lastIndexOf('\r') + 1);
+  };
   const keep = raw => {
-    const line = raw.replace(ANSI, '').replace(/\r$/, '');
+    const line = clean(raw);
     if (line.startsWith('::')) return;
     done.push(line.slice(0, MAX_LINE));
     if (done.length > max) done.shift();
   };
+  const stream = () => {
+    const dec = new StringDecoder('utf8');
+    let partial = '';
+    return {
+      push(chunk) {
+        const parts = (partial + (typeof chunk === 'string' ? chunk : dec.write(chunk))).split('\n');
+        partial = parts.pop().slice(-MAX_PARTIAL);
+        parts.forEach(keep);
+      },
+      partial: () => partial + dec.end(),
+    };
+  };
+  const streams = [];
+  const main = stream();
+  streams.push(main);
   return {
-    push(chunk) {
-      const parts = (partial + String(chunk)).split('\n');
-      partial = parts.pop();
-      parts.forEach(keep);
-    },
+    push: c => main.push(c),
+    stream() { const s = stream(); streams.push(s); return s; },
     lines() {
-      if (!partial) return done.slice();
       const all = done.slice();
-      const line = partial.replace(ANSI, '');
-      if (!line.startsWith('::')) all.push(line.slice(0, MAX_LINE));
+      for (const s of streams) {
+        const line = clean(s.partial());
+        if (line && !line.startsWith('::')) all.push(line.slice(0, MAX_LINE));
+      }
       return all.slice(-max);
     },
   };
