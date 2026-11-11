@@ -199,3 +199,63 @@ test('шаблони CI не викликають kando-session', () => {
     assert.ok(!fs.readFileSync(path.join(__dirname, '..', 'templates', f), 'utf8').includes('kando-session'), f);
   }
 });
+
+// #26: pr-review і merge позначають роботу лейблом ai:in-progress на самому PR (не на задачі),
+// щоб Kando показав «у роботі поза Kando», і знімають його на кожному виході.
+for (const name of ['pr-review', 'merge']) {
+  test(`${name}: ai:in-progress ставиться на PR після begin і кроку 0`, () => {
+    const s = skill(name);
+    const begin = s.indexOf('kando-session" begin');
+    const step0 = s.search(/^## Крок 0\./m);
+    const put = s.indexOf('Постав `ai:in-progress` на PR');
+    assert.ok(put > 0, 'є «Постав `ai:in-progress` на PR»');
+    assert.ok(step0 >= 0 && begin > step0 && put > begin, 'після кроку 0 і begin');
+    assert.ok(s.indexOf('--add-label ai:in-progress') > begin, 'команда постановки');
+    for (const line of s.split('\n').filter(l => l.includes('ai:in-progress'))) {
+      assert.doesNotMatch(line, /\$ISSUE|closingIssuesReferences|gh issue edit/, line);
+    }
+    for (const m of s.matchAll(/gh \S+ edit [^\n]*ai:in-progress/g)) {
+      assert.match(m[0], /^gh pr edit \$PR -R "\$REPO" --(add|remove)-label ai:in-progress/, m[0]);
+    }
+    assert.ok(s.indexOf('--remove-label ai:in-progress') > put, 'є зняття');
+  });
+
+  test(`${name}: лейбли agent:* не змінюються`, () => {
+    assert.doesNotMatch(skill(name), /--(add|remove)-label\s+"?agent:/);
+  });
+}
+
+test('pr-review: ai:in-progress знімається після ai:reviewed і на шляху без прав на лейбл', () => {
+  const s = skill('pr-review');
+  const reviewed = s.indexOf('--add-label "ai:reviewed"');
+  const removes = [...s.matchAll(/--remove-label ai:in-progress/g)].map(m => m.index);
+  assert.ok(reviewed > 0 && removes.some(i => i > reviewed), 'зняття після ai:reviewed');
+  const noRights = s.indexOf('якщо прав на створення немає');
+  assert.ok(noRights > 0, 'є шлях без прав');
+  assert.match(s.slice(noRights, s.indexOf('\n\n', noRights)), /`ai:in-progress`/, 'на шляху без прав теж знімає');
+  // Посилання «як описано нижче» веде на крок, що справді існує.
+  assert.match(s, /`ai:in-progress` став і знімай, як описано нижче/);
+  assert.match(s, /^## Крок 0в\. Познач початок роботи/m);
+});
+
+test('merge: ai:in-progress знімається на гейті, після gh pr merge до gh issue close і на помилці мерджу', () => {
+  const s = skill('merge');
+  const gate = s.indexOf('**зупинись без дій**');
+  const gateLine = s.slice(s.lastIndexOf('\n', gate), s.indexOf('\n', gate));
+  assert.match(gateLine, /зніми `ai:in-progress` з PR/);
+  const merge = s.indexOf('gh pr merge $PR');
+  const close = s.indexOf('gh issue close');
+  const remove = s.indexOf('--remove-label ai:in-progress', merge);
+  assert.ok(merge > 0 && remove > merge && close > remove, 'gh pr merge → зняття → gh issue close');
+  const fail = s.indexOf('`gh pr merge` впав');
+  assert.ok(fail > merge && fail < close, 'є шлях помилки мерджу');
+  const failPara = s.slice(fail, s.indexOf('\n\n', fail));
+  assert.match(failPara, /коментар/);
+  assert.match(failPara, /`ai:in-progress`/);
+  assert.match(failPara, /Виконай крок «Відпустити задачу в Kando»/);
+});
+
+test('плагін: версія 1.1.4', () => {
+  const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugin', '.claude-plugin', 'plugin.json'), 'utf8'));
+  assert.equal(p.version, '1.1.4');
+});
