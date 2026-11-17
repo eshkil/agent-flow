@@ -1,0 +1,18 @@
+# Dependabot: оновлює сторонні GitHub Actions, закріплені за SHA (поруч коментар з версією).
+# Усі оновлення — одним PR раз на тиждень.
+# templates/*.yml Dependabot не бачить: їх звіряє test/actions-pinned.test.js
+# з .github/workflows/kando-agent.yml і action.yml, тож після його PR оновіть шаблони так само.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/runner"]
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # Власний раннер свідомо лишається на тезі v2.
+      - dependency-name: "eshkil/agent-flow*"
