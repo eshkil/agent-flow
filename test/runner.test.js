@@ -476,7 +476,8 @@ function toolsOnly(names) {
   fs.mkdirSync(dir);
   for (const name of names) {
     const found = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
-    assert.ok(found, `${name} не знайдено`);
+    // Вбудована команда оболонки дала б ім'я, а не шлях, і посилання вийшло б битим.
+    assert.ok(path.isAbsolute(found), `${name}: потрібен шлях до програми, отримано «${found}»`);
     fs.symlinkSync(found, path.join(dir, name));
   }
   return dir;
