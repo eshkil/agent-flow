@@ -469,9 +469,23 @@ test('bin/gh: токен береться з RUNNER_TEMP/kando/token і пере
   assert.equal(r.stdout.trim(), 'REAL token=ghs_fresh args=pr list');
 });
 
+// Тека лише з тим, що потрібне самій обгортці (bash для shebang, dirname), без gh: на раннері
+// справжній gh лежить у /usr/bin, тож PATH із /usr/bin:/bin знаходив би його, і тест падав.
+function toolsOnly(names) {
+  const dir = path.join(tmp(), 'tools');
+  fs.mkdirSync(dir);
+  for (const name of names) {
+    const found = spawnSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).stdout.trim();
+    assert.ok(found, `${name} не знайдено`);
+    fs.symlinkSync(found, path.join(dir, name));
+  }
+  return dir;
+}
+
 test('bin/gh: немає gh у PATH → код 127 з поясненням', () => {
-  const r = runGh([BIN, '/nonexistent']);
-  assert.equal(r.status, 127);
+  const PATH = [BIN, '/nonexistent', toolsOnly(['bash', 'dirname'])].join(':');
+  const r = spawnSync(path.join(BIN, 'gh'), ['pr', 'list'], { encoding: 'utf8', env: { PATH } });
+  assert.equal(r.status, 127, r.stderr);
   assert.match(r.stderr, /gh/);
 });
 
