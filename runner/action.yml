@@ -81,7 +81,7 @@ runs:
       run: node "$GITHUB_ACTION_PATH/../src/runner/install-claude.js"
 
     - id: claude
-      uses: anthropics/claude-code-action@v1
+      uses: anthropics/claude-code-action@cc98b3ae241b0fcfb6a42a2690751afffecb4452 # v1.0.278
       with:
         path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
         prompt: ${{ steps.start.outputs.prompt }}
