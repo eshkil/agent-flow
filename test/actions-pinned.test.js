@@ -18,3 +18,23 @@ for (const file of FILES) {
     }
   });
 }
+
+// Dependabot оновлює лише .github/workflows і action.yml; шаблони він не бачить.
+// Після його PR ці тести падають, поки шаблони не оновлять так само.
+test('templates/kando-agent.yml збігається з .github/workflows/kando-agent.yml (без першого рядка)', () => {
+  const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
+  const own = read('.github/workflows/kando-agent.yml').split('\n').slice(1).join('\n');
+  assert.equal(read('templates/kando-agent.yml'), own);
+});
+
+test('та сама стороння дія скрізь закріплена за тим самим SHA', () => {
+  const seen = new Map();
+  for (const file of FILES) {
+    const text = fs.readFileSync(path.join(__dirname, '..', file), 'utf8');
+    for (const [, action, sha] of text.matchAll(/^\s*(?:- )?uses: ([^@\s]+)@([0-9a-f]{40})/gm)) {
+      const first = seen.get(action);
+      if (first) assert.equal(sha, first.sha, `${action}: ${file} має ${sha}, а ${first.file} — ${first.sha}`);
+      else seen.set(action, { sha, file });
+    }
+  }
+});
