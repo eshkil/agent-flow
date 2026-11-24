@@ -15,13 +15,18 @@ after(() => { for (const d of dirs) fs.rmSync(d, { recursive: true, force: true 
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'ic-')); dirs.push(d); return d; };
 const quiet = { log() {} };
 
-// Дерево _actions: наш runner і claude-code-action поруч, як на диску runner-а.
-function actionsTree(version = '2.1.318') {
+// Справжній SHA claude-code-action з runner/action.yml: саме ця тека є в _actions.
+const ACTION_REF = actionYml.match(/uses: anthropics\/claude-code-action@([0-9a-f]{40})/)[1];
+
+// Дерево _actions, як на диску runner-а: наш runner з action.yml і claude-code-action у теці
+// з тим ref, за яким його закріплено (з #28 це SHA, а не тег).
+function actionsTree(version = '2.1.318', { ref = ACTION_REF, uses = ref, yml = true } = {}) {
   const root = tmp();
   const runner = path.join(root, 'eshkil', 'agent-flow', 'v2', 'runner');
   fs.mkdirSync(runner, { recursive: true });
+  if (yml) fs.writeFileSync(path.join(runner, 'action.yml'), `    - id: claude\n      uses: anthropics/claude-code-action@${uses} # v1.0.0\n`);
   if (version !== null) {
-    const dir = path.join(root, 'anthropics', 'claude-code-action', 'v1', 'src', 'entrypoints');
+    const dir = path.join(root, 'anthropics', 'claude-code-action', ref, 'src', 'entrypoints');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'run.ts'), `  const claudeCodeVersion = "${version}";\n`);
   }
@@ -43,6 +48,30 @@ test('pinnedVersion: версія з коду дії; немає файла чи
   assert.equal(pinnedVersion(actionsTree(null)), null);
   assert.equal(pinnedVersion(actionsTree('1.0; rm -rf')), null);
   assert.equal(pinnedVersion(''), null);
+});
+
+test('pinnedVersion: тека дії — з ref у runner/action.yml (SHA), а не v1', () => {
+  // Регресія після #28: шукали claude-code-action/v1 і з SHA версію не знаходили ніколи.
+  assert.equal(pinnedVersion(actionsTree('2.1.330', { ref: 'a'.repeat(40) })), '2.1.330');
+  // Лише тека v1 поруч, а action.yml каже SHA → тієї версії, яку запустять, немає.
+  assert.equal(pinnedVersion(actionsTree('2.1.318', { ref: 'v1', uses: 'b'.repeat(40) })), null);
+});
+
+test('pinnedVersion: справжній runner/action.yml → тека з його SHA', () => {
+  const runner = actionsTree('2.1.330');
+  fs.writeFileSync(path.join(runner, 'action.yml'), actionYml);
+  assert.equal(pinnedVersion(runner), '2.1.330');
+});
+
+test('pinnedVersion: крок у формі «- uses:» теж розпізнається', () => {
+  const runner = actionsTree('2.1.330');
+  fs.writeFileSync(path.join(runner, 'action.yml'), `    - uses: anthropics/claude-code-action@${ACTION_REF} # v1.0.0\n`);
+  assert.equal(pinnedVersion(runner), '2.1.330');
+});
+
+test('pinnedVersion: без action.yml чи з ref-шляхом → null', () => {
+  assert.equal(pinnedVersion(actionsTree('2.1.318', { yml: false })), null);
+  assert.equal(pinnedVersion(actionsTree('2.1.318', { ref: 'v1', uses: '../../x' })), null);
 });
 
 test('installClaude: ставить у теку всередині RUNNER_TEMP, справжній HOME не чіпає', () => {
