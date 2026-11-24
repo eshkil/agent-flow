@@ -42,35 +42,4 @@ function detectLimit(messages) {
   return { limited: true, until: rejected ? untilOf(rejected.rate_limit_info) : null };
 }
 
-// Для журналу запуску: лише службові повідомлення про ліміт, без тексту сесії,
-// щоб побачити реальний формат і не вивантажувати розмову агента.
-function limitExtract(messages) {
-  const clip = s => String(s ?? '').slice(0, 500);
-  return messages.flatMap(m => {
-    if (isEvent(m)) return [{ type: m.type, rate_limit_info: m.rate_limit_info }];
-    if (m?.type === 'assistant' && m.error) {
-      const text = (m.message?.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
-      return [{ type: 'assistant', error: m.error, text: clip(text) }];
-    }
-    if (m?.type === 'result') {
-      return [{ type: 'result', subtype: m.subtype, is_error: m.is_error, result: m.is_error ? clip(m.result) : undefined }];
-    }
-    return [];
-  });
-}
-
-function formatUntil(date, timeZone) {
-  const fmt = tz => {
-    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
-      timeZone: tz, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-    }).formatToParts(date).map(p => [p.type, p.value]));
-    return `${parts.day}.${parts.month} о ${parts.hour}:${parts.minute} (${tz})`;
-  };
-  try {
-    return fmt(timeZone || 'UTC');
-  } catch {
-    return fmt('UTC');
-  }
-}
-
-module.exports = { detectLimit, readMessages, limitExtract, formatUntil };
+module.exports = { detectLimit, readMessages };

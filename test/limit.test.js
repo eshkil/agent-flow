@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { detectLimit, readMessages, limitExtract, formatUntil } = require('../src/limit');
+const { detectLimit, readMessages } = require('../src/limit');
 
 // Форма повідомлень — як у execution_file claude-code-action (масив SDK-повідомлень).
 const init = { type: 'system', subtype: 'init', session_id: 's' };
@@ -65,19 +65,4 @@ test('readMessages: файл з масивом / відсутній / зіпсо
   assert.deepEqual(readMessages(path.join(dir, 'нема.json')), []);
   assert.deepEqual(readMessages(bad), []);
   assert.deepEqual(readMessages(''), []);
-});
-
-test('limitExtract: лише службові повідомлення про ліміт, без тексту сесії', () => {
-  const tool = { type: 'user', message: { content: [{ type: 'tool_result', content: 'секретний вивід' }] } };
-  const ex = limitExtract([init, tool, rle('rejected', 1760461200), assistantErr, result({ is_error: true, result: limitText })]);
-  assert.deepEqual(ex.map(m => m.type), ['rate_limit_event', 'assistant', 'result']);
-  assert.ok(!JSON.stringify(ex).includes('секретний'));
-});
-
-test('formatUntil: дата й час у заданій зоні; невідома зона → UTC', () => {
-  const d = new Date('2025-10-14T17:00:00Z');
-  assert.equal(formatUntil(d, 'Europe/Kyiv'), '14.10 о 20:00 (Europe/Kyiv)');
-  assert.equal(formatUntil(d, 'UTC'), '14.10 о 17:00 (UTC)');
-  assert.equal(formatUntil(d, 'Нема/Такої'), '14.10 о 17:00 (UTC)');
-  assert.equal(formatUntil(d, ''), '14.10 о 17:00 (UTC)');
 });
