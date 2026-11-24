@@ -63,6 +63,12 @@ test('pinnedVersion: справжній runner/action.yml → тека з йог
   assert.equal(pinnedVersion(runner), '2.1.330');
 });
 
+test('pinnedVersion: крок у формі «- uses:» теж розпізнається', () => {
+  const runner = actionsTree('2.1.330');
+  fs.writeFileSync(path.join(runner, 'action.yml'), `    - uses: anthropics/claude-code-action@${ACTION_REF} # v1.0.0\n`);
+  assert.equal(pinnedVersion(runner), '2.1.330');
+});
+
 test('pinnedVersion: без action.yml чи з ref-шляхом → null', () => {
   assert.equal(pinnedVersion(actionsTree('2.1.318', { yml: false })), null);
   assert.equal(pinnedVersion(actionsTree('2.1.318', { ref: 'v1', uses: '../../x' })), null);

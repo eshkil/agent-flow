@@ -17,7 +17,8 @@ const TIMEOUT_MS = 2 * 60e3;
 const CHECK_TIMEOUT_MS = 30e3;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$/;
 
-const USES = /^\s*uses:\s*anthropics\/claude-code-action@([A-Za-z0-9._-]+)\s*(?:#.*)?$/m;
+// Крок може бути й у формі `- uses: …`, тож дефіс перед uses необов'язковий.
+const USES = /^\s*(?:-\s+)?uses:\s*anthropics\/claude-code-action@([A-Za-z0-9._-]+)\s*(?:#.*)?$/m;
 
 // Версію визначає дія, тож беремо її з коду самої дії. Runner кладе дію в
 // _actions/anthropics/claude-code-action/<ref>, де ref — те, за чим її закріплено в
