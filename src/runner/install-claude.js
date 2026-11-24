@@ -17,10 +17,19 @@ const TIMEOUT_MS = 2 * 60e3;
 const CHECK_TIMEOUT_MS = 30e3;
 const VERSION = /^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$/;
 
-// Версію визначає дія (`v1` рухається), тож беремо її з коду самої дії поруч із цим action.
+const USES = /^\s*uses:\s*anthropics\/claude-code-action@([A-Za-z0-9._-]+)\s*(?:#.*)?$/m;
+
+// Версію визначає дія, тож беремо її з коду самої дії. Runner кладе дію в
+// _actions/anthropics/claude-code-action/<ref>, де ref — те, за чим її закріплено в
+// runner/action.yml (з #28 це SHA коміту, і Dependabot його міняє). Тому ref читаємо звідти ж.
 function pinnedVersion(actionPath) {
   // actionPath: <_actions>/eshkil/agent-flow/<версія>/runner
-  const file = path.join(actionPath, '..', '..', '..', '..', 'anthropics', 'claude-code-action', 'v1', 'src', 'entrypoints', 'run.ts');
+  if (!actionPath) return null;
+  let yml;
+  try { yml = fs.readFileSync(path.join(actionPath, 'action.yml'), 'utf8'); } catch { return null; }
+  const ref = yml.match(USES)?.[1];
+  if (!ref || ref.startsWith('.')) return null;
+  const file = path.join(actionPath, '..', '..', '..', '..', 'anthropics', 'claude-code-action', ref, 'src', 'entrypoints', 'run.ts');
   let src;
   try { src = fs.readFileSync(file, 'utf8'); } catch { return null; }
   const m = src.match(/claudeCodeVersion\s*=\s*"([^"]+)"/);
@@ -50,7 +59,7 @@ function installClaude({ version, runnerTemp, spawn = spawnSync, log = console }
 function main({ env = process.env, log = console, install = installClaude } = {}) {
   const version = pinnedVersion(env.GITHUB_ACTION_PATH || '');
   if (!version) {
-    log.log('::warning::Не вдалося визначити версію Claude Code (перевір шлях і формат claudeCodeVersion у claude-code-action/v1/src/entrypoints/run.ts): захист від колізії вимкнено, Claude Code поставить claude-code-action');
+    log.log('::warning::Не вдалося визначити версію Claude Code (перевір рядок uses: anthropics/claude-code-action@<ref> у runner/action.yml і формат claudeCodeVersion у claude-code-action/<ref>/src/entrypoints/run.ts): захист від колізії вимкнено, Claude Code поставить claude-code-action');
     return;
   }
   let exe = null;
