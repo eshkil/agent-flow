@@ -281,3 +281,16 @@ test('pr-review: PR лише з документацією — прицільн�
   const template = s.slice(s.indexOf("## 🤖 Код-рев'ю"), s.indexOf('### Зауваження'));
   assert.match(template, /тести не запускались: лише документація/);
 });
+
+// Рев'ю #36: тека `docs/` сама по собі не робить файл документацією — код і конфіг сайту
+// документації (`docs/conf.py`, `docs/package.json`) повертають повну сюїту.
+test('pr-review: код і конфіг у `docs/` не вважаються документацією', () => {
+  const s = skill('pr-review');
+  const evidence = s.slice(s.indexOf('**Докази**'), s.indexOf('**Регресії**'));
+  const rule = evidence.split(/\n(?=- )/).map(b => b.replace(/\s+/g, ' ')).find(b => /лише документацію/.test(b));
+  assert.ok(rule);
+  assert.doesNotMatch(rule, /теку `docs\/`/, 'уся тека docs/ не є документацією');
+  assert.match(rule, /зокрема в `docs\/`/);
+  assert.match(rule, /код чи конфіг у `docs\/`/);
+});
+
