@@ -255,7 +255,51 @@ test('merge: ai:in-progress знімається на гейті, після gh 
   assert.match(failPara, /Виконай крок «Відпустити задачу в Kando»/);
 });
 
-test('плагін: версія 1.1.4', () => {
+test('плагін: версія 1.1.5', () => {
   const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugin', '.claude-plugin', 'plugin.json'), 'utf8'));
-  assert.equal(p.version, '1.1.4');
+  assert.equal(p.version, '1.1.5');
+});
+
+// PR лише з документацією: повна сюїта цих змін не перевіряє, а на великому проєкті займає
+// раннер на десятки хвилин. Достатньо тестів, що читають змінені файли.
+test('pr-review: PR лише з документацією — прицільні тести замість усієї сюїти', () => {
+  const s = skill('pr-review');
+  const evidence = s.slice(s.indexOf('**Докази**'), s.indexOf('**Регресії**'));
+  const rule = evidence.split(/\n(?=- )/).map(b => b.replace(/\s+/g, ' ')).find(b => /лише документацію/.test(b));
+  assert.ok(rule, 'у «Доказах» є пункт про PR лише з документацією');
+  assert.match(rule, /усю сюїту не запускай/);
+  assert.match(rule, /grep -rl/, 'шукає тести, що читають змінені файли');
+  assert.match(rule, /прожени лише їх/);
+  assert.match(rule, /«тести не запускались: лише документація»/);
+  assert.match(rule, /не зауваження й не привід для ⚠️/);
+  // Будь-який інший файл повертає звичайну перевірку.
+  assert.match(rule, /Хоч один інший файл/);
+  assert.match(rule, /сюїта як завжди/);
+  // Проєкт може вимагати повну сюїту завжди: тоді діє його правило.
+  assert.match(rule, /`CLAUDE\.md` \/ `AGENTS\.md` прямо вимагають/);
+  // Шаблон рев'ю показує, як записати такий доказ.
+  const template = s.slice(s.indexOf("## 🤖 Код-рев'ю"), s.indexOf('### Зауваження'));
+  assert.match(template, /тести не запускались: лише документація/);
+});
+
+// Рев'ю #36: тека `docs/` сама по собі не робить файл документацією — код і конфіг сайту
+// документації (`docs/conf.py`, `docs/package.json`) повертають повну сюїту.
+test('pr-review: код і конфіг у `docs/` не вважаються документацією', () => {
+  const s = skill('pr-review');
+  const evidence = s.slice(s.indexOf('**Докази**'), s.indexOf('**Регресії**'));
+  const rule = evidence.split(/\n(?=- )/).map(b => b.replace(/\s+/g, ' ')).find(b => /лише документацію/.test(b));
+  assert.ok(rule);
+  assert.doesNotMatch(rule, /теку `docs\/`/, 'уся тека docs/ не є документацією');
+  assert.match(rule, /зокрема в `docs\/`/);
+  assert.match(rule, /код чи конфіг у `docs\/`/);
+});
+
+// Рев'ю #36: «Обовʼязковий мінімум доказів» у Додатку не має суперечити винятку для docs-only PR.
+test('pr-review: Додаток посилається на виняток для PR лише з документацією', () => {
+  const s = skill('pr-review');
+  const appendix = s.slice(s.indexOf('# Додаток: докази і GitHub'));
+  const minimum = appendix.split(/\n(?=- )/).map(b => b.replace(/\s+/g, ' ')).find(b => /Обовʼязковий мінімум доказів/.test(b));
+  assert.ok(minimum);
+  assert.match(minimum, /лише документацію/);
+  assert.match(minimum, /у «Доказах»/);
 });
