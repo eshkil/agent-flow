@@ -5,7 +5,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FILES = ['templates/kando-agent.yml', 'templates/agent.yml', 'runner/action.yml', 'action.yml', '.github/workflows/kando-agent.yml'];
+const FILES = ['templates/kando-agent.yml', 'runner/action.yml', '.github/workflows/kando-agent.yml'];
 
 for (const file of FILES) {
   test(`${file}: сторонні дії закріплено за SHA`, () => {
@@ -19,7 +19,7 @@ for (const file of FILES) {
   });
 }
 
-// Dependabot оновлює лише .github/workflows і action.yml; шаблони він не бачить.
+// Dependabot оновлює лише .github/workflows і runner/action.yml; шаблони він не бачить.
 // Після його PR ці тести падають, поки шаблони не оновлять так само.
 test('templates/kando-agent.yml збігається з .github/workflows/kando-agent.yml (без першого рядка)', () => {
   const read = f => fs.readFileSync(path.join(__dirname, '..', f), 'utf8');
