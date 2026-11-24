@@ -294,3 +294,12 @@ test('pr-review: код і конфіг у `docs/` не вважаються д�
   assert.match(rule, /код чи конфіг у `docs\/`/);
 });
 
+// Рев'ю #36: «Обовʼязковий мінімум доказів» у Додатку не має суперечити винятку для docs-only PR.
+test('pr-review: Додаток посилається на виняток для PR лише з документацією', () => {
+  const s = skill('pr-review');
+  const appendix = s.slice(s.indexOf('# Додаток: докази і GitHub'));
+  const minimum = appendix.split(/\n(?=- )/).map(b => b.replace(/\s+/g, ' ')).find(b => /Обовʼязковий мінімум доказів/.test(b));
+  assert.ok(minimum);
+  assert.match(minimum, /лише документацію/);
+  assert.match(minimum, /у «Доказах»/);
+});
