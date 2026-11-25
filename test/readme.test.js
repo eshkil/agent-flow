@@ -45,3 +45,11 @@ test('README і скіли: коло блоку — пара review_head і roun
   for (const name of ['pr-review', 'review-triage', 'pr-fix']) assert.ok(skill(name).includes(PAIR_RULE), name);
   assert.match(readme(), /для `head` і `round` найновішого довіреного рев'ю немає довіреного `kando:triage`/);
 });
+
+// Рев'ю PR #37, R2: довіра до будь-якого бота — описане обмеження.
+test('README: довіра до бота за типом, а не за логіном — описано ризик', () => {
+  const r = readme();
+  assert.match(r, /бот довіряється за типом \(`user\.type == "Bot"`\), а не за логіном/);
+  assert.match(r, /`github-actions\[bot\]`/);
+  assert.match(r, /не вмикайте автоцикл/);
+});
