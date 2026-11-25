@@ -303,3 +303,31 @@ test('pr-review: Додаток посилається на виняток дл�
   assert.match(minimum, /лише документацію/);
   assert.match(minimum, /у «Доказах»/);
 });
+
+test('pr-review: машинний блок kando:review — дослівний формат перед підписом', () => {
+  const s = skill('pr-review');
+  assert.ok(s.includes('<!-- kando:review {"v":1,"round":<N>,"head":"<sha>","findings":[{"id":"R1","severity":"blocking","path":"src/app.js","line":142,"title":"…"}]} -->'));
+  assert.match(s, /`severity` — `blocking` або `minor`/);
+  assert.match(s, /`--` заміни на `—`/);
+  const block = s.indexOf('<!-- kando:review');
+  assert.ok(block > 0 && block < s.indexOf('<sub>🤖 Автоматичне рев\'ю'), 'блок перед підписом');
+});
+test('pr-review: id зауважень наскрізні, повторне — зі старим id', () => {
+  const s = skill('pr-review');
+  assert.match(s, /після найбільшого `R`/);
+  assert.match(s, /зберігає свій `id`/);
+  assert.match(s, /\*\*R1 · `src\/app\.js:142` — блокуюче\.\*\*/);
+});
+test('pr-review: повторне коло — лише перевірка виправлень і нові blocking у зміненому', () => {
+  const s = skill('pr-review');
+  assert.ok(s.includes('- Автоцикл: коло <N> з <M>'));
+  const sec = s.slice(s.indexOf('### Повторне коло автоциклу'));
+  assert.match(sec, /`N ≥ 2`/);
+  assert.match(sec, /kando:triage/);
+  assert.match(sec, /нових `minor` не додавай/);
+  assert.match(sec, /`skip`[^\n]*не піднімай/);
+});
+test('pr-review: без рядка автоциклу round = 1, решта як раніше', () => {
+  const s = skill('pr-review');
+  assert.match(s, /без нього `round` = 1/);
+});
