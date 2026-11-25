@@ -14,8 +14,8 @@ const BLOCK = /## Пріоритет проєкту\n\n(?:- [^\n]*\n(?:  [^\n]*\
 const body = name => skill(name).replace(BLOCK, '');
 const blockOf = name => skill(name).match(BLOCK)[0];
 
-test('є всі сім скілів', () => {
-  assert.deepEqual(names, ['bug-agent', 'feature-spec', 'implement', 'merge', 'pr-fix', 'pr-review', 'triage']);
+test('є всі вісім скілів', () => {
+  assert.deepEqual(names, ['bug-agent', 'feature-spec', 'implement', 'merge', 'pr-fix', 'pr-review', 'review-triage', 'triage']);
 });
 
 for (const name of names) {

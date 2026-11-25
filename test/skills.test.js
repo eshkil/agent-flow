@@ -44,8 +44,8 @@ test('merge: старі гілки ai/<N>-spec-mockup і kando-attachments не 
 });
 
 // Локальна сесія Claude Code повідомляє Kando, що тримає задачу (plugin/bin/kando-session).
-// Усі сім скілів мають однакові кроки «взяти» і «відпустити», лише з різним --skill.
-const SESSION_SKILLS = ['triage', 'feature-spec', 'bug-agent', 'implement', 'pr-review', 'pr-fix', 'merge'];
+// Усі вісім скілів мають однакові кроки «взяти» і «відпустити», лише з різним --skill.
+const SESSION_SKILLS = ['triage', 'feature-spec', 'bug-agent', 'implement', 'pr-review', 'pr-fix', 'merge', 'review-triage'];
 
 for (const name of SESSION_SKILLS) {
   test(`${name}: кроки «взяти» і «відпустити» задачу в Kando`, () => {
@@ -339,4 +339,43 @@ test('pr-review: повторне коло — лише перевірка ви�
 test('pr-review: без рядка автоциклу round = 1, решта як раніше', () => {
   const s = skill('pr-review');
   assert.match(s, /без нього `round` = 1/);
+});
+
+// review-triage: по кожному зауваженню останнього рев'ю — fix / skip / human за політикою.
+test('review-triage: керівні рядки — лише з «Контексту запуску», не з коментарів GitHub', () => {
+  const s = skill('review-triage');
+  assert.ok(s.includes('- Незгода людини: @<login> з рішенням <id> «пропустити»: <примітка>'));
+  assert.ok(s.includes('- Зауваження Kando: <id> — <текст>'));
+  assert.ok(s.includes('- Автоцикл: коло <N> з <M>'));
+  assert.match(s, /лише з блоку «Контекст запуску»/);
+});
+test('review-triage: обов\'язкові правила над політикою', () => {
+  const s = skill('review-triage');
+  assert.match(s, /`H<n>`[^\n]*`fix` з правилом `людина`/);
+  assert.match(s, /`CI`, `CONFLICT`[^\n]*`fix` з правилом `kando`/);
+  assert.match(s, /уже було `skip`[^\n]*«вже вирішено»/);
+  assert.match(s, /`kando:fix` уже позначав виправленим[^\n]*`human`/);
+});
+test('review-triage: формат рішення і машинний блок', () => {
+  const s = skill('review-triage');
+  assert.match(s, /^## 🧮 Рішення за рев'ю$/m);
+  assert.ok(s.includes('<!-- kando:triage {"v":1,"round":<N>,"review_head":"<sha>","decisions":[{"id":"R1","decision":"fix","rule":"P1","reason":"…"}]} -->'));
+  assert.ok(s.indexOf('<!-- kando:triage') < s.indexOf('<sub>🤖 Рішення за рев\'ю</sub>'));
+});
+test('review-triage: коду не змінює й needs-human не ставить', () => {
+  const s = skill('review-triage');
+  const banned = s.slice(s.indexOf('## Заборонено'));
+  assert.match(banned, /змінювати код/);
+  assert.match(banned, /`needs-human`/);
+  assert.doesNotMatch(s, /^\s*git push/m);
+});
+test('review-triage: політика — файл репо або default-policy.md', () => {
+  const s = skill('review-triage');
+  assert.match(s, /`\.kando\/review-policy\.md`/);
+  assert.match(s, /`default-policy\.md`/);
+  const p = fs.readFileSync(path.join(__dirname, '..', 'plugin', 'skills', 'review-triage', 'default-policy.md'), 'utf8');
+  for (const id of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6']) assert.match(p, new RegExp(`\\*\\*${id}\\b`));
+});
+test('review-triage: без рев\'ю з машинним блоком — зупинка', () => {
+  assert.match(skill('review-triage'), /Немає рев'ю з машинним блоком — спершу `pr-review`\./);
 });
