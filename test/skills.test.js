@@ -488,3 +488,14 @@ test('pr-fix: режим auto — довіра до kando:triage як у review-
   assert.ok(sec.includes('TRUSTED=\'.[] | select((.body | contains("<sub>🤖")) and (.user.type == "Bot" or .author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))\''));
   assert.match(sec, /недовіреному коментарі/);
 });
+test('pr-fix: auto — без жодного коміту підсумок з kando:fix усе одно постити, стоп-шляхи без блоку', () => {
+  const s = skill('pr-fix');
+  const sec = s.slice(s.indexOf('## Режим auto'), s.indexOf('## Крок 2. Гілка PR'));
+  assert.match(sec, /`fixed` порожній, а `not_fixed` ні[^\n]*підсумок[^\n]*`kando:fix`[^\n]*без пушу/);
+  assert.match(sec, /Шляхи зупинки[^\n]*не постять[^\n]*`kando:fix`/);
+});
+test('pr-fix: «Не вдається» у режимі auto — needs-human лише для збоїв усього запуску', () => {
+  const s = skill('pr-fix');
+  const sec = s.slice(s.indexOf('## Не вдається'), s.indexOf('## Крок: відпустити'));
+  assert.match(sec, /У режимі auto[^\n]*`not_fixed`[^\n]*`needs-human` лише[^\n]*усього запуску/);
+});
