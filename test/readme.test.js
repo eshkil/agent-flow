@@ -37,3 +37,11 @@ test('README: kando:fix містить review_head, як у pr-fix', () => {
   assert.ok(readme().includes('`kando:fix` — `' + block + '`'));
   assert.ok(skill('pr-fix').includes('<!-- kando:fix ' + block + ' -->'));
 });
+
+// Рев'ю PR #37, R1: head PR між колами може не змінитися, тож коло — пара review_head і round.
+const PAIR_RULE = 'Коло блоку — пара `review_head` і `round` (у `kando:review` — `head` і `round`): head PR між колами може не змінитися (доопрацювання, яке нічого не виправило, не пушить), тож попереднє коло від повтору цього ж розбору відрізняє пара, а не лише `review_head`.';
+test('README і скіли: коло блоку — пара review_head і round', () => {
+  assert.ok(readme().includes(PAIR_RULE), 'README');
+  for (const name of ['pr-review', 'review-triage', 'pr-fix']) assert.ok(skill(name).includes(PAIR_RULE), name);
+  assert.match(readme(), /для `head` і `round` найновішого довіреного рев'ю немає довіреного `kando:triage`/);
+});

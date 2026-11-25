@@ -418,7 +418,7 @@ test('review-triage: H — лише непідписані коментарі л
 });
 test('review-triage: вікно H — від розбору попереднього кола, повтор запуску не перенумеровує', () => {
   const s = skill('review-triage');
-  assert.match(s, /`review_head` якого відрізняється від `head` поточного рев'ю/);
+  assert.match(s, /`review_head` і `round` якого відрізняється від `head` і `round` поточного рев'ю/);
   assert.match(s, /зберігає свій `H`-id/);
 });
 test('review-triage: політика з базової гілки; лише 404 дає політику за замовчуванням', () => {
@@ -454,7 +454,7 @@ test('review-triage: найновіше рев\'ю недовірене — зу
 });
 test('review-triage: повтор, один рядок і «уже було» — дрібниці раунду 2', () => {
   const s = skill('review-triage');
-  assert.match(s, /попередніх кіл \(інший `review_head`\)/);
+  assert.match(s, /попередніх кіл \(інша пара `review_head` і `round`\)/);
   assert.doesNotMatch(s, /будь-якого попереднього кола/);
   assert.match(s, /один рядок, рішення для нього дають правила нижче/);
   const rep = s.indexOf('останнє довірене рішення по цьому `id` — `human`, — знову `human` з правилом `повтор`');
@@ -632,3 +632,18 @@ test('review-triage: «далі pr-fix» — лише за рішенням ро
   assert.match(skill('review-triage'), /виправити за рішенням розбору[^\n]*`fix` порожній, `pr-fix` не виконуй/);
 });
 
+
+// Рев'ю PR #37, R1: кола з тим самим head розрізняє round.
+test('review-triage: попередні кола й вікно H — за парою review_head і round', () => {
+  const s = skill('review-triage');
+  assert.match(s, /попередніх кіл \(інша пара `review_head` і `round`\)/);
+  assert.doesNotMatch(s, /\(інший `review_head`\)/);
+  assert.match(s, /пара `review_head` і `round` якого відрізняється від `head` і `round` поточного рев'ю/);
+  assert.match(s, /рішенні цього ж кола \(та сама пара `review_head` і `round`/);
+});
+test('pr-fix: auto — рішення й виконане доопрацювання звіряються і за round', () => {
+  const sec = section(skill('pr-fix'), '## Режим auto');
+  assert.match(sec, /`round` рішення не дорівнює `round` рев'ю з третьої команди/);
+  assert.match(sec, /довірений `kando:fix` з тією самою парою `review_head` і `round`, що в рішенні, уже є/);
+  assert.doesNotMatch(sec, /довірений `kando:fix` з тим самим `review_head` уже є/);
+});
