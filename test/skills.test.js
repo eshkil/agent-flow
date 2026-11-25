@@ -256,9 +256,9 @@ test('merge: ai:in-progress знімається на гейті, після gh 
   assert.match(failPara, /Виконай крок «Відпустити задачу в Kando»/);
 });
 
-test('плагін: версія 1.1.5', () => {
+test('плагін: версія 1.2.0', () => {
   const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugin', '.claude-plugin', 'plugin.json'), 'utf8'));
-  assert.equal(p.version, '1.1.5');
+  assert.equal(p.version, '1.2.0');
 });
 
 // PR лише з документацією: повна сюїта цих змін не перевіряє, а на великому проєкті займає
