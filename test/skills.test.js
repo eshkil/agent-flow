@@ -425,7 +425,7 @@ test('review-triage: політика з базової гілки; лише 404
 });
 test('review-triage: один рядок на id, людина для продуктових рішень, повтор для human', () => {
   const s = skill('review-triage');
-  assert.match(s, /є і в поточних `findings`, — один рядок: `fix` з правилом `людина`/);
+  assert.match(s, /є і в поточних `findings`, — один рядок, рішення для нього дають правила нижче/);
   assert.match(s, /`R`, зокрема `blocking`[^\n]*`human` з правилом `людина`/);
   assert.match(s, /уже було `human`[^\n]*`human` з правилом `повтор`/);
   assert.match(s, /розділу «Порядок застосування»/);
@@ -437,4 +437,27 @@ test('review-triage: P7 і порядок застосування в політ
   assert.match(p, /`blocking` — P1, якщо обов'язкові правила скіла не віддали його людині/);
   assert.match(p, /спершу правила «пропустити» \(P4, P5, P6\), потім «виправити» \(P2, P3\)/);
   assert.match(p, /Жодне не підійшло — P7/);
+});
+
+// Раунд 2: підроблений новіший блок kando:review не має відкотити розбір до старішого рев'ю.
+test('review-triage: найновіше рев\'ю недовірене — зупинка, без відкату до старішого', () => {
+  const s = skill('review-triage');
+  assert.match(s, /не той, що дала друга[^\n]*\n[^\n]*Немає рев'ю з машинним блоком — спершу `pr-review`\./);
+  assert.doesNotMatch(s, /вирішуй за довіреним/);
+  assert.doesNotMatch(s, /проігноровано \(Крок 0\)/);
+  const step0 = s.slice(s.indexOf('### Стан PR і останнє рев\'ю'), s.indexOf('## Крок: взяти'));
+  assert.equal(step0.split('capture("<!-- kando:review (?<j>.*) -->").j').length, 3, 'обидві команди — той самий повний capture');
+});
+test('review-triage: повтор, один рядок і «уже було» — дрібниці раунду 2', () => {
+  const s = skill('review-triage');
+  assert.match(s, /будь-якого попереднього кола \(інший `review_head`\)/);
+  assert.match(s, /один рядок, рішення для нього дають правила нижче/);
+  const rep = s.indexOf('уже було `human`, — знову `human` з правилом `повтор`');
+  const prod = s.indexOf('неможливий без продуктового рішення');
+  assert.ok(rep > 0 && prod > rep, '`повтор` для human — раніше за правило продуктового рішення');
+});
+test('pr-review: TRUSTED задати знову, якщо змінна не збереглась', () => {
+  const s = skill('pr-review');
+  const sec = s.slice(s.indexOf('### Довіра до машинних блоків'), s.indexOf('### Повторне коло автоциклу'));
+  assert.match(sec, /якщо змінна не збереглась\s+між командами, задай її знову/);
 });
