@@ -461,3 +461,30 @@ test('pr-review: TRUSTED задати знову, якщо змінна не з�
   const sec = s.slice(s.indexOf('### Довіра до машинних блоків'), s.indexOf('### Повторне коло автоциклу'));
   assert.match(sec, /якщо змінна не збереглась\s+між командами, задай її знову/);
 });
+test('pr-fix: режим auto — зауваження з останнього kando:triage, лише fix', () => {
+  const s = skill('pr-fix');
+  assert.ok(s.includes('- Режим: auto'));
+  const sec = s.slice(s.indexOf('## Режим auto'));
+  assert.match(sec, /останнього[^\n]*`kando:triage`/);
+  assert.match(sec, /`skip` і `human` не чіпати/);
+  assert.match(sec, /За рішенням виправляти нічого\./);
+});
+test('pr-fix: режим auto — невиправлене в not_fixed, без needs-human', () => {
+  const sec = skill('pr-fix').slice(skill('pr-fix').indexOf('## Режим auto'));
+  assert.match(sec, /не ставити `needs-human`/);
+  assert.match(sec, /`not_fixed`/);
+});
+test('pr-fix: блок kando:fix лише в режимі auto, перед підписом', () => {
+  const s = skill('pr-fix');
+  assert.ok(s.includes('<!-- kando:fix {"v":1,"round":<N>,"fixed":["R1"],"not_fixed":[{"id":"R2","reason":"…"}]} -->'));
+  assert.match(s, /Поза режимом auto блок не додавати/);
+  assert.match(s, /повторне рев'ю запустить Kando/);
+});
+test('pr-fix: коміт на пункт з id', () => {
+  assert.ok(skill('pr-fix').includes('fix: <суть> (<id>, рев\'ю #$PR)'));
+});
+test('pr-fix: режим auto — довіра до kando:triage як у review-triage', () => {
+  const sec = skill('pr-fix').slice(skill('pr-fix').indexOf('## Режим auto'));
+  assert.ok(sec.includes('TRUSTED=\'.[] | select((.body | contains("<sub>🤖")) and (.user.type == "Bot" or .author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))\''));
+  assert.match(sec, /недовіреному коментарі/);
+});
