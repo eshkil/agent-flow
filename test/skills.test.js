@@ -309,6 +309,7 @@ test('pr-review: машинний блок kando:review — дослівний �
   assert.ok(s.includes('<!-- kando:review {"v":1,"round":<N>,"head":"<sha>","findings":[{"id":"R1","severity":"blocking","path":"src/app.js","line":142,"title":"…"}]} -->'));
   assert.match(s, /`severity` — `blocking` або `minor`/);
   assert.match(s, /`--` заміни на `—`/);
+  assert.match(s, /`"` і `\\`/);
   const block = s.indexOf('<!-- kando:review');
   assert.ok(block > 0 && block < s.indexOf('<sub>🤖 Автоматичне рев\'ю'), 'блок перед підписом');
 });
@@ -321,8 +322,16 @@ test('pr-review: id зауважень наскрізні, повторне — 
 test('pr-review: повторне коло — лише перевірка виправлень і нові blocking у зміненому', () => {
   const s = skill('pr-review');
   assert.ok(s.includes('- Автоцикл: коло <N> з <M>'));
-  const sec = s.slice(s.indexOf('### Повторне коло автоциклу'));
+  const start = s.indexOf('### Повторне коло автоциклу');
+  const rest = s.slice(start + 3);
+  const sec = s.slice(start, start + 3 + rest.search(/\n#{2,3} /));
   assert.match(sec, /`N ≥ 2`/);
+  assert.match(sec, /лише з `R`/);
+  assert.match(sec, /`H`, `CI`, `CONFLICT`[^\n]*`pr-fix`[^\n]*не `findings`/);
+  assert.match(sec, /git diff <попередній head>\.\.HEAD/);
+  assert.match(sec, /Немає блоку `kando:triage` — перевіряй як перше коло/);
+  assert.match(sec, /`human`[^\n]*не піднімай/);
+  assert.match(sec, /зберігає стару `severity`/);
   assert.match(sec, /kando:triage/);
   assert.match(sec, /нових `minor` не додавай/);
   assert.match(sec, /`skip`[^\n]*не піднімай/);
