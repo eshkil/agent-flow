@@ -9,12 +9,18 @@
 const fs = require('node:fs');
 
 const LIMIT_TEXT = /usage limit|limit reached|hit your limit/i;
-const PROVIDER_LIMIT_TEXT = /\b429\b|rate_limit_error|too[\s_-]+many[\s_-]+requests|quota[\s_-]+exceeded|insufficient[\s_-]+(?:balance|credits)|usage limit|limit reached|hit your limit/i;
+const PROVIDER_LIMIT_TEXT = /(?:\b(?:http|status|status_code|code)\b\s*[:=]?\s*429\b|\bapi\s+error\s*:\s*429\b|\b429\b\s*(?:too[\s_-]+many|rate|limit|error|status)|^429\b|rate_limit_error|too[\s_-]+many[\s_-]+requests|quota[\s_-]+exceeded|insufficient[\s_-]+(?:balance|credits)|usage limit|limit reached|hit your limit)/i;
 const ISO_DATE_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})\b/;
 const RESETS_AT_TEXT_RE = /"?resets[_-]?at"?\s*[:=]\s*"?(\d{9,16}|\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))"?/i;
 const RETRY_AFTER_HTTP_RE = /retry[-_]after["']?\s*[:=]\s*["']?([A-Za-z]{3},\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\s+\d{2}:\d{2}:\d{2}\s+GMT)/i;
-const RETRY_AFTER_SEC_RE = /retry[-_]after["']?\s*[:=]\s*["']?(\d+)(?:\s*s(?:ec(?:onds?)?)?)?\b/i;
+const RETRY_AFTER_SEC_RE = /retry[-_]after["']?\s*[:=]\s*["']?(\d+)(?!\s*[-T:])(?:\s*s(?:ec(?:onds?)?)?)?(?=$|[\s,;"'.)\]])/i;
 const NONE = Object.freeze({ limited: false, until: null });
+
+function validDate(ms) {
+  if (!Number.isFinite(ms)) return null;
+  const d = new Date(ms);
+  return Number.isFinite(d.getTime()) ? d : null;
+}
 
 function readMessages(file) {
   if (!file) return [];
@@ -32,11 +38,11 @@ function parseEpoch(val) {
   if (val === null || val === undefined || val === '') return null;
   const n = Number(val);
   if (Number.isFinite(n) && n > 0) {
-    return new Date(n > 1e12 ? n : n * 1000);
+    return validDate(n > 1e12 ? n : n * 1000);
   }
   if (typeof val === 'string') {
     const ts = Date.parse(val);
-    if (Number.isFinite(ts)) return new Date(ts);
+    if (Number.isFinite(ts)) return validDate(ts);
   }
   return null;
 }
@@ -48,14 +54,14 @@ function untilOf(info) {
 function parseRetryAfter(val, now) {
   if (val === null || val === undefined || val === '') return null;
   if (typeof val === 'number' && Number.isFinite(val) && val >= 0) {
-    return new Date(now + val * 1000);
+    return validDate(now + val * 1000);
   }
   const str = String(val).trim();
   if (/^\d+$/.test(str)) {
-    return new Date(now + Number(str) * 1000);
+    return validDate(now + Number(str) * 1000);
   }
   const ts = Date.parse(str);
-  return Number.isFinite(ts) ? new Date(ts) : null;
+  return Number.isFinite(ts) ? validDate(ts) : null;
 }
 
 function messageText(m) {
