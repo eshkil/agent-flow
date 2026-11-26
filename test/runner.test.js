@@ -102,6 +102,7 @@ test('start: токен у файлі з правами 0600, вихід prompt,
   assert.equal(out.bot_id, 77);
   assert.equal(out.issue, 5);
   assert.equal(out.pr, '');
+  assert.equal(out.kando_approval, '');
   // Токен старту віддаємо виходом (для claude-code-action) — лише в github_token і під маскою.
   assert.equal(out.github_token, 'ghs_first');
   assert.ok(!Object.entries(out).some(([k, v]) => k !== 'github_token' && String(v).includes('ghs_first')));
@@ -136,6 +137,19 @@ test('start: PATH отримує bin/, git-конфіг іде у setEnv (а н�
   assert.deepEqual(added, ['/opt/af/bin']);
   assert.equal(envSet.GIT_CONFIG_COUNT, '3');
   assert.equal(envSet.GIT_CONFIG_VALUE_1, '/opt/af/bin/git-credential-kando');
+});
+
+test('start: експортує kando_approval як JSON, коли Kando його повертає', async () => {
+  const dir = tmp();
+  const out = {};
+  const withApproval = { ...startResponse, kando_approval: { login: 'eshkil', sha: 'a'.repeat(40) } };
+  await start({
+    env: baseEnv(dir),
+    fetchImpl: fakeFetch({ routes: { '/start': json(200, withApproval) } }),
+    setOutput: (k, v) => { out[k] = v; },
+    log: silent,
+  });
+  assert.deepEqual(JSON.parse(out.kando_approval), { login: 'eshkil', sha: 'a'.repeat(40) });
 });
 
 // ─── git-конфіг на job ───────────────────────────────────────────────────────

@@ -21,6 +21,10 @@ const CLOSING_ISSUE_RE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b
 
 const defaultSleep = ms => new Promise(r => setTimeout(r, ms));
 
+function recordFailure(env, report) {
+  try { writeFailure(env, report); } catch (_) { /* не заважаємо повернути помилку */ }
+}
+
 function isProtectedBranch(branch, baseRef) {
   if (!branch) return true;
   if (baseRef && branch === baseRef) return true;
@@ -162,11 +166,11 @@ function checkTimelineReviewed(pr, timeline) {
 }
 
 async function checkHumanApproval(gh, repo, headSha, reviews, kandoApproval, permCache) {
-  // Для кожного користувача беремо його останній відгук, що не COMMENTED.
+  // Для кожного користувача беремо його останній фінальний відгук (без COMMENTED і PENDING).
   const latestByUser = new Map();
   for (const r of reviews) {
     if (!r?.user?.login || r.user.type === 'Bot') continue;
-    if (r.state === 'COMMENTED') continue;
+    if (r.state === 'COMMENTED' || r.state === 'PENDING') continue;
     const key = r.user.login.toLowerCase();
     const prev = latestByUser.get(key);
     const t = Date.parse(r.submitted_at) || 0;
@@ -189,19 +193,21 @@ function checkCiStatus(checkRuns, commitStatuses, runId) {
   const failed = [];
   const pending = [];
 
-  // Повторний прогін створює новий check_run із тією самою назвою — беремо останній за id.
+  // Ключ включає app.id і check_suite.id, щоб дві різні перевірки з однаковою назвою
+  // (`test`/`build` із різних workflow або App) не перезаписували одна одну.
   const latestRuns = new Map();
   for (const cr of checkRuns) {
     if (isOwnRunUrl(cr.html_url, runId) || isOwnRunUrl(cr.details_url, runId)) continue;
-    const prev = latestRuns.get(cr.name);
-    if (!prev || Number(cr.id || 0) >= Number(prev.id || 0)) latestRuns.set(cr.name, cr);
+    const key = `${cr.app?.id ?? ''}:${cr.check_suite?.id ?? ''}:${cr.name}`;
+    const prev = latestRuns.get(key);
+    if (!prev || Number(cr.id || 0) >= Number(prev.id || 0)) latestRuns.set(key, cr);
   }
   for (const cr of latestRuns.values()) {
     if (cr.status !== 'completed') pending.push(cr.name);
     else if (!OK_CONCLUSIONS.has(cr.conclusion)) failed.push(`${cr.name} (${cr.conclusion || 'failure'})`);
   }
 
-  // Commit statuses: GitHub повертає їх від новіших до старіших — беремо перший на context.
+  // Commit statuses: /commits/{ref}/statuses повертає записи від новіших до старіших — беремо перший на context.
   const seenContexts = new Set();
   for (const st of commitStatuses) {
     if (!st?.context || seenContexts.has(st.context)) continue;
@@ -219,28 +225,38 @@ function checkCiStatus(checkRuns, commitStatuses, runId) {
 async function resolveClosingIssues(gh, repo, prNumber, prBody, issueEnv) {
   const nums = new Set();
   const fromEnv = Number(issueEnv);
-  if (Number.isInteger(fromEnv) && fromEnv > 0) nums.add(fromEnv);
-  for (const n of parseClosingIssuesFromBody(prBody)) nums.add(n);
+  if (Number.isInteger(fromEnv) && fromEnv > 0 && fromEnv !== prNumber) nums.add(fromEnv);
 
-  // Пробуємо GraphQL closingIssuesReferences (як `gh pr view --json closingIssuesReferences`).
+  // Основне джерело — GraphQL closingIssuesReferences лише з цього репозиторію.
+  // Парсинг тіла PR використовується лише як fallback при збої GraphQL.
+  let gqlOk = false;
   try {
     const [owner, name] = repo.split('/');
     const res = await gh.req('/graphql', {
       method: 'POST',
       body: {
-        query: 'query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){closingIssuesReferences(first:50){nodes{number}}}}}',
+        query: 'query($owner:String!,$name:String!,$pr:Int!){repository(owner:$owner,name:$name){pullRequest(number:$pr){closingIssuesReferences(first:50){nodes{number repository{nameWithOwner}}}}}}',
         variables: { owner, name, pr: prNumber },
       },
       allowStatus: [400, 403, 404],
     });
     const nodes = res.data?.data?.repository?.pullRequest?.closingIssuesReferences?.nodes;
-    if (Array.isArray(nodes)) {
+    if (res.ok && Array.isArray(nodes)) {
+      gqlOk = true;
       for (const node of nodes) {
+        const nodeRepo = node?.repository?.nameWithOwner;
+        if (nodeRepo && nodeRepo.toLowerCase() !== repo.toLowerCase()) continue;
         const n = Number(node?.number);
-        if (Number.isInteger(n) && n > 0) nums.add(n);
+        if (Number.isInteger(n) && n > 0 && n !== prNumber) nums.add(n);
       }
     }
-  } catch { /* fallback на ISSUE та тіло PR уже зібрано */ }
+  } catch { /* fallback нижче */ }
+
+  if (!gqlOk) {
+    for (const n of parseClosingIssuesFromBody(prBody)) {
+      if (n !== prNumber) nums.add(n);
+    }
+  }
 
   return [...nums];
 }
@@ -257,7 +273,7 @@ async function runMerge({
   const prNumber = Number(env.PR);
   if (!repo || !Number.isInteger(prNumber) || prNumber <= 0) {
     const msg = `merge: некоректні параметри запуску (repo=${repo || '—'}, PR=${env.PR || '—'})`;
-    writeFailure(env, { stage: 'merge', command: null, exit_code: 1, tail: [msg] });
+    recordFailure(env, { stage: 'merge', command: null, exit_code: 1, tail: [msg] });
     throw new Error(msg);
   }
 
@@ -296,11 +312,11 @@ async function runMerge({
       else if (pr.mergeable === false || pr.mergeable_state === 'dirty') unmet.push('є конфлікти з базовою гілкою');
     }
 
-    const [timeline, reviews, checkRuns, statusRes] = await Promise.all([
+    const [timeline, reviews, checkRuns, commitStatuses] = await Promise.all([
       gh.paginate(`/repos/${repo}/issues/${prNumber}/timeline?per_page=100`),
       gh.paginate(`/repos/${repo}/pulls/${prNumber}/reviews?per_page=100`),
-      headSha ? gh.paginate(`/repos/${repo}/commits/${headSha}/check-runs?per_page=100`, d => d?.check_runs || []) : [],
-      headSha ? gh.req(`/repos/${repo}/commits/${headSha}/status`) : { data: { statuses: [] } },
+      headSha ? gh.paginate(`/repos/${repo}/commits/${headSha}/check-runs?filter=latest&per_page=100`, d => d?.check_runs || []) : [],
+      headSha ? gh.paginate(`/repos/${repo}/commits/${headSha}/statuses?per_page=100`) : [],
     ]);
 
     const reviewErr = checkTimelineReviewed(pr, timeline);
@@ -311,7 +327,7 @@ async function runMerge({
     const approvalErr = await checkHumanApproval(gh, repo, headSha, reviews, kandoApproval, permCache);
     if (approvalErr) unmet.push(approvalErr);
 
-    unmet.push(...checkCiStatus(checkRuns, statusRes.data?.statuses || [], runId));
+    unmet.push(...checkCiStatus(checkRuns, commitStatuses, runId));
 
     if (unmet.length) {
       const body = [
@@ -343,34 +359,42 @@ async function runMerge({
       try {
         await gh.req(`/repos/${repo}/issues/${prNumber}/comments`, { method: 'POST', body: { body } });
       } catch { /* помилка коментаря не має приховати причину збою мерджу */ }
-      writeFailure(env, { stage: 'merge', command: `PUT /repos/${repo}/pulls/${prNumber}/merge`, exit_code: e.status || 1, tail: [e.message] });
+      recordFailure(env, { stage: 'merge', command: `PUT /repos/${repo}/pulls/${prNumber}/merge`, exit_code: e.status || 1, tail: [e.message] });
       throw e;
     }
 
-    // Видаляємо гілку PR лише в цьому ж репо й ніколи — захищені (kando-attachments, ai/*-spec-mockup, base).
-    const sameRepo = (pr.head?.repo?.full_name || repo).toLowerCase() === repo.toLowerCase();
+    // Після успішного мерджу побічні збої (видалення гілки, зняття лейбла, закриття issue)
+    // лише логуються, щоб не переводити вже змерджений PR у failed.
+    const sameRepo = Boolean(pr.head?.repo?.full_name) && pr.head.repo.full_name.toLowerCase() === repo.toLowerCase();
     let deletedBranch = null;
     if (sameRepo && !isProtectedBranch(headRef, baseRef)) {
-      const refPath = `/repos/${repo}/git/refs/heads/${headRef.split('/').map(encodeURIComponent).join('/')}`;
-      const del = await gh.req(refPath, { method: 'DELETE', allowStatus: [404, 422] });
-      if (del.ok) deletedBranch = headRef;
+      try {
+        const refPath = `/repos/${repo}/git/refs/heads/${headRef.split('/').map(encodeURIComponent).join('/')}`;
+        const del = await gh.req(refPath, { method: 'DELETE', allowStatus: [404, 422] });
+        if (del.ok) deletedBranch = headRef;
+      } catch (e) {
+        log.log(`merge: не вдалося видалити гілку ${headRef}: ${e.message}`);
+      }
     }
 
-    // Знімаємо ai:in-progress до закриття issues (збій зняття не скасовує успішний мердж).
-    labelRemoved = true;
-    await removeInProgress();
+    // Знімаємо ai:in-progress до закриття issues; при збої finally зробить ще одну спробу.
+    labelRemoved = await removeInProgress();
 
-    // Закриваємо пов'язані відкриті issues без зайвого підсумкового коментаря.
+    // Закриваємо пов'язані відкриті issues (не PR) без зайвого підсумкового коментаря.
     const linked = await resolveClosingIssues(gh, repo, prNumber, pr.body, env.ISSUE);
     const closedIssues = [];
     for (const n of linked) {
-      const iss = await gh.req(`/repos/${repo}/issues/${n}`, { allowStatus: [404] });
-      if (iss.ok && iss.data?.state === 'open') {
-        await gh.req(`/repos/${repo}/issues/${n}`, {
-          method: 'PATCH',
-          body: { state: 'closed', state_reason: 'completed' },
-        });
-        closedIssues.push(n);
+      try {
+        const iss = await gh.req(`/repos/${repo}/issues/${n}`, { allowStatus: [404] });
+        if (iss.ok && iss.data?.state === 'open' && !iss.data?.pull_request) {
+          await gh.req(`/repos/${repo}/issues/${n}`, {
+            method: 'PATCH',
+            body: { state: 'closed', state_reason: 'completed' },
+          });
+          closedIssues.push(n);
+        }
+      } catch (e) {
+        log.log(`merge: не вдалося закрити issue #${n}: ${e.message}`);
       }
     }
 

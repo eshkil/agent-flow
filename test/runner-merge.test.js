@@ -53,20 +53,23 @@ function createGithubFake(over = {}) {
       { event: 'committed', committer: { date: '2026-11-26T10:00:00Z' } },
       { event: 'labeled', label: { name: 'ai:reviewed' }, created_at: '2026-11-26T10:05:00Z' },
     ],
+    timelinePages: null,
     reviews: [
       { user: { login: 'alice', type: 'User' }, state: 'APPROVED', commit_id: SHA, submitted_at: '2026-11-26T10:06:00Z' },
     ],
     permissions: { alice: 'write', bob: 'admin', viewer: 'read' },
     checkRuns: [
-      { id: 1, name: 'tests', status: 'completed', conclusion: 'success', html_url: 'https://github.com/acme/app/actions/runs/111/job/1' },
-      // Власний job агента завжди in_progress — має ігноруватися.
-      { id: 2, name: 'agent', status: 'in_progress', conclusion: null, html_url: `https://github.com/acme/app/actions/runs/${RUN_ID}/job/2` },
+      { id: 1, name: 'tests', status: 'completed', conclusion: 'success', app: { id: 10 }, check_suite: { id: 100 }, html_url: 'https://github.com/acme/app/actions/runs/111/job/1' },
+      { id: 2, name: 'agent', status: 'in_progress', conclusion: null, app: { id: 10 }, check_suite: { id: 101 }, html_url: `https://github.com/acme/app/actions/runs/${RUN_ID}/job/2` },
     ],
     statuses: [],
     issues: { 5: { number: 5, state: 'open' } },
-    closingRefs: [5],
+    closingRefs: [{ number: 5, repository: { nameWithOwner: REPO } }],
+    graphqlStatus: 200,
     mergeStatus: 200,
     mergeBody: { merged: true, sha: 'merged-sha' },
+    deleteRefStatus: 204,
+    failCloseIssue: null,
     ...over,
   };
   const calls = [];
@@ -85,7 +88,14 @@ function createGithubFake(over = {}) {
       const data = state.prSequence ? state.prSequence[Math.min(prFetches++, state.prSequence.length - 1)] : state.pr;
       return makeRes(200, data);
     }
-    if (method === 'GET' && p.startsWith(`/repos/${REPO}/issues/10/timeline`)) return makeRes(200, state.timeline);
+    if (method === 'GET' && p.startsWith(`/repos/${REPO}/issues/10/timeline`)) {
+      if (state.timelinePages) {
+        const page = Number(u.searchParams.get('page') || '1');
+        const nextUrl = page < state.timelinePages.length ? `https://api.github.com/repos/${REPO}/issues/10/timeline?per_page=100&page=${page + 1}` : null;
+        return makeRes(200, state.timelinePages[page - 1], nextUrl ? { link: `<${nextUrl}>; rel="next"` } : {});
+      }
+      return makeRes(200, state.timeline);
+    }
     if (method === 'GET' && p.startsWith(`/repos/${REPO}/pulls/10/reviews`)) return makeRes(200, state.reviews);
     if (method === 'GET' && p.startsWith(`/repos/${REPO}/collaborators/`)) {
       const login = decodeURIComponent(p.split('/')[5]);
@@ -95,15 +105,18 @@ function createGithubFake(over = {}) {
     if (method === 'GET' && p.startsWith(`/repos/${REPO}/commits/${SHA}/check-runs`)) {
       return makeRes(200, { check_runs: state.checkRuns });
     }
-    if (method === 'GET' && p === `/repos/${REPO}/commits/${SHA}/status`) {
-      return makeRes(200, { statuses: state.statuses });
+    if (method === 'GET' && p.startsWith(`/repos/${REPO}/commits/${SHA}/statuses`)) {
+      return makeRes(200, state.statuses);
     }
     if (method === 'POST' && p === `/repos/${REPO}/issues/10/comments`) return makeRes(201, { id: 1 });
     if (method === 'PUT' && p === `/repos/${REPO}/pulls/10/merge`) return makeRes(state.mergeStatus, state.mergeBody);
-    if (method === 'DELETE' && p.startsWith(`/repos/${REPO}/git/refs/heads/`)) return makeRes(204, null);
+    if (method === 'DELETE' && p.startsWith(`/repos/${REPO}/git/refs/heads/`)) {
+      return makeRes(state.deleteRefStatus, state.deleteRefStatus >= 400 ? { message: 'Forbidden' } : null);
+    }
     if (method === 'POST' && p === '/graphql') {
+      if (state.graphqlStatus >= 400) return makeRes(state.graphqlStatus, { message: 'Forbidden' });
       return makeRes(200, {
-        data: { repository: { pullRequest: { closingIssuesReferences: { nodes: state.closingRefs.map(number => ({ number })) } } } },
+        data: { repository: { pullRequest: { closingIssuesReferences: { nodes: state.closingRefs } } } },
       });
     }
     const issMatch = /^\/repos\/acme\/app\/issues\/(\d+)$/.exec(p);
@@ -111,6 +124,7 @@ function createGithubFake(over = {}) {
       const n = Number(issMatch[1]);
       if (method === 'GET') return state.issues[n] ? makeRes(200, state.issues[n]) : makeRes(404, { message: 'Not Found' });
       if (method === 'PATCH') {
+        if (state.failCloseIssue === n) return makeRes(500, { message: 'Internal Error' });
         state.issues[n] = { ...state.issues[n], ...body };
         return makeRes(200, state.issues[n]);
       }
@@ -139,7 +153,6 @@ test('parseKandoApproval: бере рядок лише з блоку Конте�
     `- Схвалення в Kando: @bob на коміті ${SHA}`,
   ].join('\n');
   assert.deepEqual(parseKandoApproval(prompt), { login: 'bob', sha: SHA });
-  // Без заголовка Контекст запуску текст ігнорується.
   assert.equal(parseKandoApproval(`- Схвалення в Kando: @bob на коміті ${SHA}`), null);
   assert.deepEqual(parseKandoApproval('', JSON.stringify({ login: 'alice', sha: SHA })), { login: 'alice', sha: SHA });
 });
@@ -163,8 +176,19 @@ test('runMerge: зелений гейт → squash-мердж з sha, видал
   assert.ok(gh.calls.some(c => c.method === 'DELETE' && c.path.endsWith('/labels/ai%3Ain-progress')));
   assert.equal(gh.state.issues[5].state, 'closed');
   assert.equal(gh.state.issues[5].state_reason, 'completed');
-  // Підсумкового коментаря при успішному мерджі не пише.
   assert.equal(gh.calls.filter(c => c.method === 'POST' && c.path.endsWith('/comments')).length, 0);
+});
+
+test('runMerge: COMMENTED і PENDING після APPROVED не скасовують схвалення', async () => {
+  const gh = createGithubFake({
+    reviews: [
+      { user: { login: 'alice', type: 'User' }, state: 'APPROVED', commit_id: SHA, submitted_at: '2026-11-26T10:06:00Z' },
+      { user: { login: 'alice', type: 'User' }, state: 'COMMENTED', commit_id: SHA, submitted_at: '2026-11-26T10:07:00Z' },
+      { user: { login: 'alice', type: 'User' }, state: 'PENDING', commit_id: SHA, submitted_at: '' },
+    ],
+  });
+  const res = await runMerge({ env: setupEnv(), fetchImpl: gh.fetchImpl, sleep: noSleep, log: silent });
+  assert.equal(res.merged, true);
 });
 
 test('runMerge: kando_approval з Контексту запуску на точному sha пропускає гейт без GitHub-Approve', async () => {
@@ -188,6 +212,18 @@ test('runMerge: kando_approval на іншому sha або від корист�
   }
 });
 
+test('runMerge: пагінація Link у timeline знаходить новіший коміт на 2-й сторінці', async () => {
+  const gh = createGithubFake({
+    timelinePages: [
+      [{ event: 'labeled', label: { name: 'ai:reviewed' }, created_at: '2026-11-26T10:00:00Z' }],
+      [{ event: 'head_ref_force_pushed', created_at: '2026-11-26T10:10:00Z' }],
+    ],
+  });
+  const res = await runMerge({ env: setupEnv(), fetchImpl: gh.fetchImpl, sleep: noSleep, log: silent });
+  assert.equal(res.merged, false);
+  assert.ok(res.reasons.some(r => /force-push/.test(r)));
+});
+
 test('runMerge: mergeable=null ретраїться до 3 разів; коли стає true — мерджить; лишається null — відмовляє', async () => {
   const basePr = createGithubFake().state.pr;
   const sleeps = [];
@@ -205,10 +241,11 @@ test('runMerge: mergeable=null ретраїться до 3 разів; коли 
   assert.ok(bad.reasons.some(r => /unknown/.test(r)));
 });
 
-// ─── відмови гейту по кожній з 4 умов ────────────────────────────────────────
-test('runMerge: draft, конфлікт, новий коміт після ai:reviewed, бот-approve, червоний/pending CI → відмова з коментарем і зняттям ai:in-progress', async () => {
+// ─── відмови гейту по всіх 4 умовах ──────────────────────────────────────────
+test('runMerge: відмови гейту (closed, draft, конфлікт, коміт/force-push, старий/чужий Approve, CI check-runs і statuses)', async () => {
   const base = createGithubFake().state.pr;
   const cases = [
+    ['closed PR', { pr: { ...base, state: 'closed' } }, /не відкритий/],
     ['draft', { pr: { ...base, draft: true } }, /draft/],
     ['conflict', { pr: { ...base, mergeable: false } }, /конфлікт/],
     ['no ai:reviewed', { pr: { ...base, labels: [] } }, /ai:reviewed/],
@@ -221,18 +258,36 @@ test('runMerge: draft, конфлікт, новий коміт після ai:rev
     ['bot approve ignored', {
       reviews: [{ user: { login: 'kando[bot]', type: 'Bot' }, state: 'APPROVED', commit_id: SHA, submitted_at: '2026-11-26T10:06:00Z' }],
     }, /Approve/],
+    ['approve on old SHA', {
+      reviews: [{ user: { login: 'alice', type: 'User' }, state: 'APPROVED', commit_id: OLD_SHA, submitted_at: '2026-11-26T10:06:00Z' }],
+    }, /Approve/],
+    ['approve without write permission', {
+      reviews: [{ user: { login: 'viewer', type: 'User' }, state: 'APPROVED', commit_id: SHA, submitted_at: '2026-11-26T10:06:00Z' }],
+    }, /Approve/],
     ['changes requested after approve', {
       reviews: [
         { user: { login: 'alice', type: 'User' }, state: 'APPROVED', commit_id: SHA, submitted_at: '2026-11-26T10:06:00Z' },
         { user: { login: 'alice', type: 'User' }, state: 'CHANGES_REQUESTED', commit_id: SHA, submitted_at: '2026-11-26T10:07:00Z' },
       ],
     }, /Approve/],
-    ['failing CI', {
-      checkRuns: [{ id: 1, name: 'lint', status: 'completed', conclusion: 'failure', html_url: 'https://github.com/acme/app/actions/runs/222/job/1' }],
+    ['failing CI check_run', {
+      checkRuns: [{ id: 1, name: 'lint', status: 'completed', conclusion: 'failure', app: { id: 10 }, check_suite: { id: 100 }, html_url: 'https://github.com/acme/app/actions/runs/222/job/1' }],
     }, /CI не пройшли.*lint/],
-    ['pending CI', {
-      checkRuns: [{ id: 1, name: 'build', status: 'in_progress', conclusion: null, html_url: 'https://github.com/acme/app/actions/runs/222/job/1' }],
+    ['same-name check_run from different workflow: failure not hidden by green', {
+      checkRuns: [
+        { id: 1, name: 'test', status: 'completed', conclusion: 'failure', app: { id: 10 }, check_suite: { id: 100 }, html_url: 'https://github.com/acme/app/actions/runs/222/job/1' },
+        { id: 2, name: 'test', status: 'completed', conclusion: 'success', app: { id: 10 }, check_suite: { id: 200 }, html_url: 'https://github.com/acme/app/actions/runs/333/job/2' },
+      ],
+    }, /CI не пройшли.*test/],
+    ['pending CI check_run', {
+      checkRuns: [{ id: 1, name: 'build', status: 'in_progress', conclusion: null, app: { id: 10 }, check_suite: { id: 100 }, html_url: 'https://github.com/acme/app/actions/runs/222/job/1' }],
     }, /CI ще тривають.*build/],
+    ['failing commit status', {
+      statuses: [{ context: 'deploy/render', state: 'failure', target_url: 'https://render.test/1' }],
+    }, /CI не пройшли.*deploy\/render/],
+    ['pending commit status', {
+      statuses: [{ context: 'deploy/render', state: 'pending', target_url: 'https://render.test/1' }],
+    }, /CI ще тривають.*deploy\/render/],
   ];
 
   for (const [name, over, pattern] of cases) {
@@ -247,13 +302,61 @@ test('runMerge: draft, конфлікт, новий коміт після ai:rev
   }
 });
 
-test('runMerge: ніколи не видаляє гілку kando-attachments', async () => {
+// ─── захист гілок, форків та ізоляція збоїв після мерджу ─────────────────────
+test('runMerge: не видаляє kando-attachments, чужий форк і видалений форк (head.repo=null)', async () => {
   const base = createGithubFake().state.pr;
-  const gh = createGithubFake({ pr: { ...base, head: { ...base.head, ref: 'kando-attachments' } } });
+  for (const head of [
+    { ...base.head, ref: 'kando-attachments' },
+    { ...base.head, ref: 'ai/5-feature', repo: { full_name: 'forker/app' } },
+    { ...base.head, ref: 'ai/5-feature', repo: null },
+  ]) {
+    const gh = createGithubFake({ pr: { ...base, head } });
+    const res = await runMerge({ env: setupEnv(), fetchImpl: gh.fetchImpl, sleep: noSleep, log: silent });
+    assert.equal(res.merged, true);
+    assert.equal(res.deletedBranch, null);
+    assert.equal(gh.calls.filter(c => c.method === 'DELETE' && c.path.includes('/git/refs/')).length, 0);
+  }
+});
+
+test('runMerge: GraphQL фільтрує чужі репо, не парсить тіло без збою GraphQL і не закриває PR-и', async () => {
+  const base = createGithubFake().state.pr;
+  const gh = createGithubFake({
+    pr: { ...base, body: 'Fixes #99 (згадка у прикладі)' },
+    closingRefs: [
+      { number: 5, repository: { nameWithOwner: REPO } },
+      { number: 7, repository: { nameWithOwner: 'other/repo' } },
+      { number: 8, repository: { nameWithOwner: REPO } },
+    ],
+    issues: {
+      5: { number: 5, state: 'open' },
+      7: { number: 7, state: 'open' },
+      8: { number: 8, state: 'open', pull_request: { url: 'x' } },
+      99: { number: 99, state: 'open' },
+    },
+  });
+  const res = await runMerge({ env: setupEnv(), fetchImpl: gh.fetchImpl, sleep: noSleep, log: silent });
+  assert.deepEqual(res.closedIssues, [5]);
+  assert.equal(gh.state.issues[5].state, 'closed');
+  assert.equal(gh.state.issues[7].state, 'open');
+  assert.equal(gh.state.issues[8].state, 'open');
+  assert.equal(gh.state.issues[99].state, 'open');
+});
+
+test('runMerge: збій видалення гілки або закриття одного issue після PUT /merge не валить запуск і закриває решту', async () => {
+  const gh = createGithubFake({
+    deleteRefStatus: 403,
+    failCloseIssue: 5,
+    closingRefs: [
+      { number: 5, repository: { nameWithOwner: REPO } },
+      { number: 6, repository: { nameWithOwner: REPO } },
+    ],
+    issues: { 5: { number: 5, state: 'open' }, 6: { number: 6, state: 'open' } },
+  });
   const res = await runMerge({ env: setupEnv(), fetchImpl: gh.fetchImpl, sleep: noSleep, log: silent });
   assert.equal(res.merged, true);
   assert.equal(res.deletedBranch, null);
-  assert.equal(gh.calls.filter(c => c.method === 'DELETE' && c.path.includes('/git/refs/')).length, 0);
+  assert.deepEqual(res.closedIssues, [6]);
+  assert.equal(gh.state.issues[6].state, 'closed');
 });
 
 test('runMerge: збій PUT /merge → коментар з помилкою, failure.json, ai:in-progress знято, issue лишається відкритим', async () => {
@@ -267,10 +370,10 @@ test('runMerge: збій PUT /merge → коментар з помилкою, fa
   assert.equal(saved.stage, 'merge');
 });
 
-test('action.yml: при skill == merge пропускає setup, claude_install і claude та викликає merge.js', () => {
+test('action.yml: при skill == merge пропускає files, setup, preflight, claude_install і claude та викликає merge.js', () => {
   const actionYml = fs.readFileSync(path.join(__dirname, '..', 'runner', 'action.yml'), 'utf8');
   const step = id => actionYml.split(/\n    - id: /).find(b => b.startsWith(`${id}\n`));
-  for (const id of ['files', 'setup', 'claude_install', 'claude']) {
+  for (const id of ['files', 'setup', 'preflight', 'claude_install', 'claude']) {
     assert.ok(step(id).includes("if: steps.start.outputs.skill != 'merge'"), `${id} має пропускатись на merge`);
   }
   assert.ok(step('merge').includes("if: steps.start.outputs.skill == 'merge'"));

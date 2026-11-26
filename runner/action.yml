@@ -73,6 +73,7 @@ runs:
     # викликають — start ходить у Kando через fetch, — тож відсутній gh не обриває їх раніше
     # за preflight, і перелік завжди доходить до finish.
     - id: preflight
+      if: steps.start.outputs.skill != 'merge'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/preflight.js"
 
