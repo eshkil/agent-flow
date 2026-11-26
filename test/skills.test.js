@@ -44,8 +44,8 @@ test('merge: старі гілки ai/<N>-spec-mockup і kando-attachments не 
 });
 
 // Локальна сесія Claude Code повідомляє Kando, що тримає задачу (plugin/bin/kando-session).
-// Усі сім скілів мають однакові кроки «взяти» і «відпустити», лише з різним --skill.
-const SESSION_SKILLS = ['triage', 'feature-spec', 'bug-agent', 'implement', 'pr-review', 'pr-fix', 'merge'];
+// Усі вісім скілів мають однакові кроки «взяти» і «відпустити», лише з різним --skill.
+const SESSION_SKILLS = ['triage', 'feature-spec', 'bug-agent', 'implement', 'pr-review', 'pr-fix', 'merge', 'review-triage'];
 
 for (const name of SESSION_SKILLS) {
   test(`${name}: кроки «взяти» і «відпустити» задачу в Kando`, () => {
@@ -138,8 +138,10 @@ const RELEASE = 'Виконай крок «Відпустити задачу в 
 const STOP_SITES = {
   'bug-agent': ['напиши, який саме крок не вдалося виконати й чому.', 'і 2–3 уточнювальні питання авторові. Не закривай тікет.', 'це продуктове рішення → `needs-human`.', 'Це нормальний і очікуваний результат, а не поразка.'],
   implement: ['чим можна довести критерії.', 'Не переписуй завдання на ходу.'],
-  'pr-fix': ['Для повторного рев\'ю — `agent:go`.» і зупинись.', 'виправ або зупинись із `needs-human`.', '2–3 варіанти рішення.'],
+  'pr-fix': ['Для повторного рев\'ю — `agent:go`.» і зупинись.', 'виправ або зупинись із `needs-human`.', '2–3 варіанти рішення.',
+    'До старішого довіреного рішення не повертайся.', 'Рішення для поточного рев\'ю немає — спершу `review-triage`.» і зупинись.', 'рішення вже виконано) — коротка відповідь «За рішенням виправляти нічого.» і зупинись.'],
   merge: ['і **зупинись без дій**.'],
+  'review-triage': ['не підставляй політику за замовчуванням.'],
 };
 for (const [name, markers] of Object.entries(STOP_SITES)) {
   test(`${name}: на кожній зупинці після begin є «Відпустити»`, () => {
@@ -255,9 +257,9 @@ test('merge: ai:in-progress знімається на гейті, після gh 
   assert.match(failPara, /Виконай крок «Відпустити задачу в Kando»/);
 });
 
-test('плагін: версія 1.1.5', () => {
+test('плагін: версія 1.2.0', () => {
   const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugin', '.claude-plugin', 'plugin.json'), 'utf8'));
-  assert.equal(p.version, '1.1.5');
+  assert.equal(p.version, '1.2.0');
 });
 
 // PR лише з документацією: повна сюїта цих змін не перевіряє, а на великому проєкті займає
@@ -302,4 +304,346 @@ test('pr-review: Додаток посилається на виняток дл�
   assert.ok(minimum);
   assert.match(minimum, /лише документацію/);
   assert.match(minimum, /у «Доказах»/);
+});
+
+test('pr-review: машинний блок kando:review — дослівний формат перед підписом', () => {
+  const s = skill('pr-review');
+  assert.ok(s.includes('<!-- kando:review {"v":1,"round":<N>,"head":"<sha>","findings":[{"id":"R1","severity":"blocking","path":"src/app.js","line":142,"title":"…"}]} -->'));
+  assert.match(s, /`severity` — `blocking` або `minor`/);
+  assert.match(s, /`--` заміни на `—`/);
+  assert.match(s, /`"` і `\\`/);
+  const block = s.indexOf('<!-- kando:review');
+  assert.ok(block > 0 && block < s.indexOf('<sub>🤖 Автоматичне рев\'ю'), 'блок перед підписом');
+});
+test('pr-review: id зауважень наскрізні, повторне — зі старим id', () => {
+  const s = skill('pr-review');
+  assert.match(s, /після найбільшого `R`/);
+  assert.match(s, /зберігає свій `id`/);
+  assert.match(s, /\*\*R1 · `src\/app\.js:142` — блокуюче\.\*\*/);
+});
+test('pr-review: повторне коло — лише перевірка виправлень і нові blocking у зміненому', () => {
+  const s = skill('pr-review');
+  assert.ok(s.includes('- Автоцикл: коло <N> з <M>'));
+  const start = s.indexOf('### Повторне коло автоциклу');
+  const rest = s.slice(start + 3);
+  const sec = s.slice(start, start + 3 + rest.search(/\n#{2,3} /));
+  assert.match(sec, /`N ≥ 2`/);
+  assert.match(sec, /лише з `R`/);
+  assert.match(sec, /`H`, `CI`, `CONFLICT`[^\n]*`pr-fix`[^\n]*не `findings`/);
+  assert.doesNotMatch(sec, /\.\.HEAD/, 'гілку PR не checkout-ять: локальний HEAD — не head PR');
+  assert.ok(sec.includes('gh api "repos/$REPO/compare/<попередній head>...<headRefOid>"'), 'порівняння з head PR');
+  assert.match(sec, /`404`[^\n]*весь диф PR/, 'запасний шлях після force-push');
+  assert.match(sec, /Немає блоку `kando:triage` — перевіряй як перше коло, разом із `minor`; решту пунктів цього розділу пропусти/);
+  assert.match(sec, /`human`[^\n]*не піднімай/);
+  assert.match(sec, /зберігає стару `severity`/);
+  assert.match(sec, /kando:triage/);
+  assert.match(sec, /нових `minor` не додавай/);
+  assert.match(sec, /`skip`[^\n]*не піднімай/);
+  assert.ok(sec.includes('останнє довірене рішення по цьому `id` — `skip`'), 'останній запис по id, а не будь-яке коло');
+});
+test('pr-review: без рядка автоциклу round = 1, решта як раніше', () => {
+  const s = skill('pr-review');
+  assert.match(s, /без нього `round` = 1/);
+});
+
+// review-triage: по кожному зауваженню останнього рев'ю — fix / skip / human за політикою.
+test('review-triage: керівні рядки — лише з «Контексту запуску», не з коментарів GitHub', () => {
+  const s = skill('review-triage');
+  assert.ok(s.includes('- Незгода людини: @<login> з рішенням <id> «пропустити»: <примітка>'));
+  assert.ok(s.includes('- Зауваження Kando: <id> — <текст>'));
+  assert.ok(s.includes('- Автоцикл: коло <N> з <M>'));
+  assert.match(s, /лише з блоку «Контекст запуску»/);
+});
+test('review-triage: обов\'язкові правила над політикою', () => {
+  const s = skill('review-triage');
+  assert.match(s, /`H<n>`[^\n]*`fix` з правилом `людина`/);
+  assert.match(s, /`CI`, `CONFLICT`[^\n]*`fix` з правилом `kando`/);
+  assert.match(s, /останнє довірене рішення по цьому `id` — `skip`[^\n]*«вже вирішено»/);
+  assert.match(s, /стан якого — `fixed`[^\n]*`human`/);
+});
+test('review-triage: формат рішення і машинний блок', () => {
+  const s = skill('review-triage');
+  assert.match(s, /^## 🧮 Рішення за рев'ю$/m);
+  assert.ok(s.includes('<!-- kando:triage {"v":1,"round":<N>,"review_head":"<sha>","decisions":[{"id":"R1","decision":"fix","rule":"P1","reason":"…"}]} -->'));
+  assert.ok(s.indexOf('<!-- kando:triage') < s.indexOf('<sub>🤖 Рішення за рев\'ю</sub>'));
+});
+test('review-triage: коду не змінює й needs-human не ставить', () => {
+  const s = skill('review-triage');
+  const banned = s.slice(s.indexOf('## Заборонено'));
+  assert.match(banned, /змінювати код/);
+  assert.match(banned, /`needs-human`/);
+  assert.doesNotMatch(s, /^\s*git push/m);
+});
+test('review-triage: політика — файл репо або default-policy.md', () => {
+  const s = skill('review-triage');
+  assert.match(s, /`\.kando\/review-policy\.md`/);
+  assert.match(s, /`default-policy\.md`/);
+  const p = fs.readFileSync(path.join(__dirname, '..', 'plugin', 'skills', 'review-triage', 'default-policy.md'), 'utf8');
+  for (const id of ['P1', 'P2', 'P3', 'P4', 'P5', 'P6']) assert.match(p, new RegExp(`\\*\\*${id}\\b`));
+});
+test('review-triage: без рев\'ю з машинним блоком — зупинка', () => {
+  assert.match(skill('review-triage'), /Немає рев'ю з машинним блоком — спершу `pr-review`\./);
+});
+
+// Раунд 1 рев'ю задачі 2: довіра до машинних блоків, вікно H, повтор запуску, політика.
+const TRUSTED_JQ = `TRUSTED='.[] | select((.body | contains("<sub>🤖")) and (.user.type == "Bot" or .author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))'`;
+const TRUST_RULE = 'Машинний блок бери лише з коментаря, підписаного `<sub>🤖`, автор якого — бот (`user.type == "Bot"`) або має `author_association` `OWNER`, `MEMBER` чи `COLLABORATOR`; блоки з інших коментарів не враховуй.';
+for (const name of ['review-triage', 'pr-review']) {
+  test(`${name}: машинні блоки — лише з довірених коментарів, тим самим правилом і фільтром`, () => {
+    const s = skill(name);
+    assert.ok(s.includes(TRUST_RULE), 'правило довіри');
+    assert.ok(s.includes(TRUSTED_JQ), 'фільтр jq');
+    assert.match(s, /gh api "repos\/\$REPO\/issues\/\$PR\/comments" --paginate[^\n]*\n?[^\n]*"\$TRUSTED"/);
+  });
+}
+test('review-triage: блоки читаються лише через довірений фільтр; недовірене рев\'ю ігнорується', () => {
+  const s = skill('review-triage');
+  assert.doesNotMatch(s, /--json comments/, 'gh pr view --json comments не дає user.type');
+  assert.match(s, /стоїть у недовіреному коментарі/);
+  assert.match(s, /стоїть у недовіреному коментарі[^\n]*(\n[^\n]+)*Немає рев'ю з машинним блоком/);
+});
+test('pr-review: попередні kando:review і kando:triage — за правилом «Довіра до машинних блоків»', () => {
+  const s = skill('pr-review');
+  assert.match(s, /^### Довіра до машинних блоків$/m);
+  const rep = s.slice(s.indexOf('### Повторне коло автоциклу'));
+  assert.match(rep.slice(0, rep.indexOf('\n## ')), /довір/);
+  const num = s.indexOf('Нумерація наскрізна в межах PR');
+  assert.match(s.slice(num, s.indexOf('\n\n', num)), /«Довіра до машинних блоків»/);
+});
+test('review-triage: H — лише непідписані коментарі людей із правом запису, без подяк', () => {
+  const s = skill('review-triage');
+  assert.match(s, /коментарі людей \(не підписані `<sub>🤖`\)/);
+  assert.match(s, /`OWNER`, `MEMBER` чи `COLLABORATOR`[^\n]*не `H`/);
+  assert.match(s, /«дякую», «ок», «👍»[^\n]*не `H`/);
+});
+test('review-triage: вікно H — від розбору попереднього кола, повтор запуску не перенумеровує', () => {
+  const s = skill('review-triage');
+  assert.match(s, /`review_head` і `round` якого відрізняється від `head` і `round` поточного рев'ю/);
+  assert.match(s, /зберігає свій `H`-id/);
+});
+test('review-triage: політика з базової гілки; лише 404 дає політику за замовчуванням', () => {
+  const s = skill('review-triage');
+  assert.match(s, /contents\/\.kando\/review-policy\.md\?ref=\$BASE/);
+  assert.match(s, /з \*\*базової\*\* гілки PR/);
+  assert.match(s, /Лише `HTTP 404`[^\n]*`default-policy\.md`/);
+});
+test('review-triage: один рядок на id, людина для продуктових рішень, повтор для human', () => {
+  const s = skill('review-triage');
+  assert.match(s, /є і в поточних `findings`, — один рядок, рішення для нього дають правила нижче/);
+  assert.match(s, /`R`, зокрема `blocking`[^\n]*`human` з правилом `людина`/);
+  assert.match(s, /останнє довірене рішення по цьому `id` — `human`[^\n]*`human` з правилом `повтор`/);
+  assert.match(s, /розділу «Порядок застосування»/);
+});
+test('review-triage: P7 і порядок застосування в політиці за замовчуванням', () => {
+  const p = fs.readFileSync(path.join(__dirname, '..', 'plugin', 'skills', 'review-triage', 'default-policy.md'), 'utf8');
+  assert.match(p, /\*\*P7\*\* — інше `minor`, якого не покриває жодне правило вище, — пропустити/);
+  assert.match(p, /^## Порядок застосування$/m);
+  assert.match(p, /`blocking` — P1, якщо обов'язкові правила скіла не віддали його людині/);
+  assert.match(p, /спершу правила «пропустити» \(P4, P5, P6\), потім «виправити» \(P2, P3\)/);
+  assert.match(p, /Жодне не підійшло — P7/);
+});
+
+// Раунд 2: підроблений новіший блок kando:review не має відкотити розбір до старішого рев'ю.
+test('review-triage: найновіше рев\'ю недовірене — зупинка, без відкату до старішого', () => {
+  const s = skill('review-triage');
+  assert.match(s, /а друга — інший або нічого[^\n]*\n[^\n]*Немає рев'ю з машинним блоком — спершу `pr-review`\./);
+  assert.doesNotMatch(s, /вирішуй за довіреним/);
+  assert.doesNotMatch(s, /проігноровано \(Крок 0\)/);
+  const step0 = s.slice(s.indexOf('### Стан PR і останнє рев\'ю'), s.indexOf('## Крок: взяти'));
+  assert.equal(step0.split('capture("<!-- kando:review (?<j>.*) -->").j').length, 3, 'обидві команди — той самий повний capture');
+});
+test('review-triage: повтор, один рядок і «уже було» — дрібниці раунду 2', () => {
+  const s = skill('review-triage');
+  assert.match(s, /попередніх кіл \(інша пара `review_head` і `round`\)/);
+  assert.doesNotMatch(s, /будь-якого попереднього кола/);
+  assert.match(s, /один рядок, рішення для нього дають правила нижче/);
+  const rep = s.indexOf('останнє довірене рішення по цьому `id` — `human`, — знову `human` з правилом `повтор`');
+  const prod = s.indexOf('неможливий без продуктового рішення');
+  assert.ok(rep > 0 && prod > rep, '`повтор` для human — раніше за правило продуктового рішення');
+});
+test('pr-review: TRUSTED задати знову, якщо змінна не збереглась', () => {
+  const s = skill('pr-review');
+  const sec = s.slice(s.indexOf('### Довіра до машинних блоків'), s.indexOf('### Повторне коло автоциклу'));
+  assert.match(sec, /якщо змінна не збереглась\s+між командами, задай її знову/);
+});
+test('pr-fix: режим auto — зауваження з останнього kando:triage, лише fix', () => {
+  const s = skill('pr-fix');
+  assert.ok(s.includes('- Режим: auto'));
+  const sec = s.slice(s.indexOf('## Режим auto'));
+  assert.match(sec, /останнього[^\n]*`kando:triage`/);
+  assert.match(sec, /`skip` і `human` не чіпати/);
+  assert.match(sec, /За рішенням виправляти нічого\./);
+});
+test('pr-fix: режим auto — невиправлене в not_fixed, без needs-human', () => {
+  const sec = skill('pr-fix').slice(skill('pr-fix').indexOf('## Режим auto'));
+  assert.match(sec, /не ставити `needs-human`/);
+  assert.match(sec, /`not_fixed`/);
+});
+test('pr-fix: блок kando:fix лише в режимі auto, перед підписом', () => {
+  const s = skill('pr-fix');
+  assert.ok(s.includes('<!-- kando:fix {"v":1,"round":<N>,"review_head":"<sha>","fixed":["R1"],"not_fixed":[{"id":"R2","reason":"…"}]} -->'));
+  assert.match(s, /Поза режимом auto блок не додавати/);
+  assert.match(s, /повторне рев'ю запустить Kando/);
+});
+test('pr-fix: коміт на пункт з id', () => {
+  assert.ok(skill('pr-fix').includes('fix: <суть> (<id>, рев\'ю #$PR)'));
+});
+test('pr-fix: режим auto — довіра до kando:triage як у review-triage', () => {
+  const sec = skill('pr-fix').slice(skill('pr-fix').indexOf('## Режим auto'));
+  assert.ok(sec.includes('TRUSTED=\'.[] | select((.body | contains("<sub>🤖")) and (.user.type == "Bot" or .author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))\''));
+  assert.match(sec, /недовіреному коментарі/);
+});
+test('pr-fix: auto — без жодного коміту підсумок з kando:fix усе одно постити, стоп-шляхи без блоку', () => {
+  const s = skill('pr-fix');
+  const sec = s.slice(s.indexOf('## Режим auto'), s.indexOf('## Крок 2. Гілка PR'));
+  assert.match(sec, /`fixed` порожній, а `not_fixed` ні[^\n]*підсумок[^\n]*`kando:fix`[^\n]*без пушу/);
+  assert.match(sec, /Шляхи зупинки[^\n]*не постять[^\n]*`kando:fix`/);
+});
+test('pr-fix: «Не вдається» у режимі auto — needs-human лише для збоїв усього запуску', () => {
+  const s = skill('pr-fix');
+  const sec = s.slice(s.indexOf('## Не вдається'), s.indexOf('## Крок: відпустити'));
+  assert.match(sec, /У режимі auto[^\n]*`not_fixed`[^\n]*`needs-human` лише[^\n]*усього запуску/);
+});
+
+// Фінальне рев'ю плану 2: стан пункту, коло, контракт kando:fix.
+const section = (s, head) => {
+  const i = s.indexOf(head);
+  assert.ok(i >= 0, `розділ ${head}`);
+  const rest = s.slice(i + head.length);
+  const j = rest.search(/\n#{2,3} /);
+  return s.slice(i, j < 0 ? s.length : i + head.length + j);
+};
+const STATE_RULE = 'Стан пункту — останній довірений запис по його `id` у блоках `kando:triage` і `kando:fix`, від старих до нових: пізніший запис перекриває ранній.';
+const ROUND_RULE = 'Коло `N` — номер рев\'ю в ланцюжку PR: перше рев\'ю — коло 1, рев\'ю після `k`-го доопрацювання — коло `k+1` (може перевищити `M`); розбір і доопрацювання мають `N` того рев\'ю, яке обробляють.';
+const NO_FIX = 'далі `pr-fix` не виконуй';
+
+for (const name of ['pr-review', 'review-triage', 'pr-fix']) {
+  test(`${name}: стан пункту — останній довірений запис по id, коло — номер рев'ю (однаково в трьох скілах)`, () => {
+    const s = skill(name);
+    assert.ok(s.includes(STATE_RULE), 'стан пункту');
+    assert.ok(s.includes(ROUND_RULE), 'визначення кола');
+    assert.ok(s.includes(TRUSTED_JQ), 'той самий довірений фільтр');
+  });
+}
+test('pr-review: історія пунктів читає і kando:fix', () => {
+  const sec = section(skill('pr-review'), '### Довіра до машинних блоків');
+  assert.ok(sec.includes('capture("<!-- kando:(?<type>review|triage|fix) (?<j>.*) -->"; "g")'));
+});
+
+// I2: рішення попереднього кола не виконується; triage на зупинці забороняє pr-fix.
+test('pr-fix: auto — рішення дійсне лише для head найновішого довіреного рев\'ю і поточного кола', () => {
+  const sec = section(skill('pr-fix'), '## Режим auto');
+  assert.ok(sec.includes('capture("<!-- kando:review (?<j>.*) -->").j'), 'читає найновіше довірене рев\'ю');
+  assert.match(sec, /`review_head` рішення не дорівнює `head`[^\n]*\n?[^\n]*`round` рішення — не `N`/);
+  assert.ok(sec.includes('«Рішення для поточного рев\'ю немає — спершу `review-triage`.»'));
+});
+test('review-triage: на кожному шляху зупинки — «далі pr-fix не виконуй»', () => {
+  const s = skill('review-triage');
+  const step0 = section(s, '### Стан PR і останнє рев\'ю');
+  assert.ok(step0.includes(NO_FIX), 'зупинки Кроку 0');
+  const policyStop = s.split('\n').find(l => l.includes('Будь-яка інша помилка (`HTTP 403`'));
+  assert.ok(policyStop.includes(NO_FIX), 'зупинка на політиці');
+  const intro = s.slice(s.indexOf('## Пріоритет проєкту'), s.indexOf('## Запуск від диспетчера'));
+  assert.match(intro, /будь-який шлях зупинки[^\n]*далі `pr-fix` не виконуй/);
+});
+
+// I3: невиправлене минулого кола — пункт розбору, людині.
+test('review-triage: id з not_fixed останнього kando:fix — пункт розбору, human/повтор', () => {
+  const sec = section(skill('review-triage'), '## Крок 2. Обов\'язкові правила (над політикою)');
+  assert.match(sec, /Пункти до рішення:[^]*кожен `id` з\s+`not_fixed` останнього довіреного блоку `kando:fix`/);
+  assert.match(sec, /^- `id` з `not_fixed` останнього довіреного блоку `kando:fix`[^\n]*`human` з правилом `повтор`/m);
+  assert.ok(sec.indexOf('- `id` з `not_fixed`') < sec.indexOf('неможливий без продуктового рішення'), 'раніше за інші правила');
+});
+
+// I5: номер кола.
+test('review-triage і pr-fix: round — коло рев\'ю, яке обробляють', () => {
+  assert.match(skill('review-triage'), /`round` — `round` рев'ю, яке розбираєш/);
+  assert.match(skill('pr-fix'), /`round` і `review_head` — з блоку `kando:triage`, за яким виправляв/);
+});
+
+// I6: конфлікт — лише злиття базової гілки.
+test('pr-fix: CONFLICT — злиття базової гілки, без перебазування', () => {
+  const sec = section(skill('pr-fix'), '## Режим auto');
+  assert.doesNotMatch(sec, /перебаз|rebase/i);
+  assert.match(sec, /`CONFLICT`[^\n]*\n?[^\n]*git merge/);
+});
+
+// M2: недовірене найновіше — перевіряти першим, рядок з назвою коментаря.
+for (const [name, head, untrusted, none] of [
+  ['review-triage', '### Стан PR і останнє рев\'ю', 'стоїть у недовіреному коментарі', 'Друга команда нічого не вивела'],
+  ['pr-fix', '## Режим auto', 'стоїть у недовіреному коментарі', 'Перша команда нічого не вивела'],
+]) {
+  test(`${name}: недовірений найновіший блок перевіряється раніше за «блоку немає», з рядком про ігнорований коментар`, () => {
+    const sec = section(skill(name), head);
+    const u = sec.indexOf(untrusted);
+    assert.ok(u > 0 && u < sec.indexOf(none), 'спершу недовірений');
+    assert.match(sec.slice(u - 200, u), /а (друга|перша) — інший або нічого/);
+    assert.match(sec.slice(u, sec.indexOf(none)), /рядок, який коментар\s+проігноровано\s+як недовірений \(`id` чи `url` і автор\)/);
+  });
+}
+
+// M3, M4, M5, M10: pr-fix.
+test('pr-fix: Крок 1 у режимі auto відсилає до «Режим auto»', () => {
+  const s = skill('pr-fix');
+  const step1 = s.slice(s.indexOf('## Крок 1. Збери зауваження'));
+  assert.match(step1.split('\n').slice(1, 4).join('\n'), /У режимі auto — замість цього кроку див\. «Режим auto»\./);
+});
+test('pr-fix: auto — кожен пункт fix рівно в fixed чи not_fixed, незгода — у not_fixed, зміни невдалого відкочено', () => {
+  const sec = section(skill('pr-fix'), '## Режим auto');
+  assert.match(sec, /рівно в один зі списків: `fixed` чи `not_fixed`/);
+  assert.match(sec, /незгода[^\n]*крок 3\.2[^\n]*`not_fixed`[^\n]*аргумент/i);
+  assert.match(sec, /не вдалося виправити[^\n]*\n?[^\n]*відкоти/);
+});
+test('pr-fix: kando:fix — екранування `"` і `\\` у reason', () => {
+  const s = skill('pr-fix');
+  const i = s.indexOf('<!-- kando:fix {"v"');
+  assert.match(s.slice(i - 400, i), /`"` і `\\` — `\\"` і `\\\\`/);
+});
+test('pr-fix: ручний запуск за рішенням розбору — як режим auto', () => {
+  const s = skill('pr-fix');
+  assert.ok(s.includes('«виправ PR #M за рішенням розбору»'));
+  assert.match(section(s, '## Режим auto'), /або коли людина прямо просить виправити за рішенням розбору/);
+});
+
+// M6: path/line можуть бути null.
+test('pr-review: path і line — null для зауваження без місця', () => {
+  assert.match(skill('pr-review'), /без місця в коді[^\n]*`"path":null,"line":null`/);
+});
+
+// M7, M8: H — право запису через API; коментар Kando про незгоду — не H.
+test('review-triage: H без author_association — право запису через collaborators/permission', () => {
+  const s = skill('review-triage');
+  assert.ok(s.includes('gh api "repos/$REPO/collaborators/<login>/permission" --jq .permission'));
+  assert.match(s, /`admin` чи `write`[^\n]*рахується/);
+});
+test('review-triage: коментар Kando про незгоду (`<sub>🤖 Kando</sub>`) — не H, джерело лише промпт', () => {
+  assert.match(skill('review-triage'), /`<sub>🤖 Kando<\/sub>`[^\n]*не `H`[^\n]*лише з рядка «Незгода людини»/);
+});
+
+// M9: повтор запуску не публікує друге рішення.
+test('review-triage: повтор із тим самим review_head і round без нових H — наявне рішення, без нового коментаря', () => {
+  const sec = section(skill('review-triage'), '## Крок 4. Опублікуй рішення');
+  assert.match(sec, /тим самим `review_head` і `round` уже є, а нових `H` після нього немає — нового не публікуй/);
+  assert.ok(sec.includes('«Рішення для цього рев\'ю вже є — беру його.»'));
+});
+
+// M10: фраза в review-triage узгоджена з pr-fix.
+test('review-triage: «далі pr-fix» — лише за рішенням розбору', () => {
+  assert.match(skill('review-triage'), /виправити за рішенням розбору[^\n]*`fix` порожній, `pr-fix` не виконуй/);
+});
+
+
+// Рев'ю PR #37, R1: кола з тим самим head розрізняє round.
+test('review-triage: попередні кола й вікно H — за парою review_head і round', () => {
+  const s = skill('review-triage');
+  assert.match(s, /попередніх кіл \(інша пара `review_head` і `round`\)/);
+  assert.doesNotMatch(s, /\(інший `review_head`\)/);
+  assert.match(s, /пара `review_head` і `round` якого відрізняється від `head` і `round` поточного рев'ю/);
+  assert.match(s, /рішенні цього ж кола \(та сама пара `review_head` і `round`/);
+});
+test('pr-fix: auto — рішення й виконане доопрацювання звіряються і за round', () => {
+  const sec = section(skill('pr-fix'), '## Режим auto');
+  assert.match(sec, /`round` рішення не дорівнює `round` рев'ю з третьої команди/);
+  assert.match(sec, /довірений `kando:fix` з тією самою парою `review_head` і `round`, що в рішенні, уже є/);
+  assert.doesNotMatch(sec, /довірений `kando:fix` з тим самим `review_head` уже є/);
 });
