@@ -53,7 +53,7 @@ allowed-tools: Bash(*/bin/kando-session *), Bash(*/bin/kando-session" *)
 
 ```bash
 KANDO_BOT='<логін з рядка «- Бот Kando: …» або від людини; немає — порожньо>'
-printf '%s' "$KANDO_BOT" | grep -Eqx '[A-Za-z0-9-]+\[bot\]' || KANDO_BOT=''
+[ "$(printf '%s' "$KANDO_BOT" | wc -l)" -eq 0 ] && printf '%s' "$KANDO_BOT" | grep -Eqx '[A-Za-z0-9-]+\[bot\]' || KANDO_BOT=''
 TRUSTED='.[] | select((.body | contains("<sub>🤖")) and ((.user.type == "Bot" and .user.login == "'"$KANDO_BOT"'") or .author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))'
 gh api "repos/$REPO/issues/$PR/comments" --paginate --jq "$TRUSTED"' | {id, at: .created_at, block: (.body | capture("<!-- kando:(?<type>review|triage|fix) (?<j>.*) -->"; "g"))}'
 gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '[.[] | select(.user.type == "Bot" and (.body | test("<!-- kando:(review|triage|fix) ")) and .user.login != "'"$KANDO_BOT"'") | .user.login] | unique'

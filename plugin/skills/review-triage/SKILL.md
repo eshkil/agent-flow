@@ -75,7 +75,7 @@ PR=${PR:-$(gh pr view --json number -q .number 2>/dev/null)}
 
 ```bash
 KANDO_BOT='<логін з рядка «- Бот Kando: …» або від людини; немає — порожньо>'
-printf '%s' "$KANDO_BOT" | grep -Eqx '[A-Za-z0-9-]+\[bot\]' || KANDO_BOT=''
+[ "$(printf '%s' "$KANDO_BOT" | wc -l)" -eq 0 ] && printf '%s' "$KANDO_BOT" | grep -Eqx '[A-Za-z0-9-]+\[bot\]' || KANDO_BOT=''
 TRUSTED='.[] | select((.body | contains("<sub>🤖")) and ((.user.type == "Bot" and .user.login == "'"$KANDO_BOT"'") or .author_association == "OWNER" or .author_association == "MEMBER" or .author_association == "COLLABORATOR"))'
 ```
 
