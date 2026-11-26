@@ -35,6 +35,7 @@ async function start({ env, fetchImpl = fetch, setOutput = () => {}, setEnv = ()
   setOutput('bot_id', res.bot?.id ?? '');
   setOutput('issue', res.issue ?? '');
   setOutput('pr', res.pr ?? '');
+  setOutput('kando_approval', res.kando_approval ? JSON.stringify(res.kando_approval) : '');
   log.log(`Kando: запуск ${env.KANDO_RUN_ID}, провайдер ${res.provider || 'claude'}, скіл ${res.skill}/${res.mode}, токен до ${res.expires_at}`);
   return res;
 }

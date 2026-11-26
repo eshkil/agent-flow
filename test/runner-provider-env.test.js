@@ -267,8 +267,8 @@ test('action.yml: claude і claude_custom взаємно виключні, setup
     assert.ok(step('provider').includes(key), `provider має отримувати ${key}`);
     assert.ok(step('claude_custom').includes(key), `claude_custom має отримувати ${key}`);
   }
-  assert.ok(step('claude').includes("if: steps.provider.outputs.is_custom != 'true'"));
-  assert.ok(step('claude_custom').includes("if: steps.provider.outputs.is_custom == 'true'"));
+  assert.ok(step('claude').includes("steps.provider.outputs.is_custom != 'true'"));
+  assert.ok(step('claude_custom').includes("steps.provider.outputs.is_custom == 'true'"));
   assert.ok(!step('claude_custom').includes('claude_code_oauth_token'));
   assert.ok(!step('claude_custom').includes('anthropic_api_key'));
   assert.ok(step('finish').includes("steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outcome || steps.claude.outcome"));

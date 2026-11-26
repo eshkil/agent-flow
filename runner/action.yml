@@ -65,13 +65,16 @@ runs:
 
     # Файли поза git — до setup, щоб його команди їх бачили. Значення секрету йде
     # лише через env і ніде не друкується: у лог потрапляють самі шляхи.
+    # Для скіла merge жодні файли, setup і LLM не потрібні — мердж іде детерміновано.
     - id: files
+      if: steps.start.outputs.skill != 'merge'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/files.js"
       env:
         KANDO_FILES_JSON: ${{ inputs.files }}
 
     - id: setup
+      if: steps.start.outputs.skill != 'merge'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/setup.js"
       env:
@@ -82,6 +85,7 @@ runs:
     # викликають — start ходить у Kando через fetch, — тож відсутній gh не обриває їх раніше
     # за preflight, і перелік завжди доходить до finish.
     - id: preflight
+      if: steps.start.outputs.skill != 'merge'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/preflight.js"
 
@@ -89,11 +93,13 @@ runs:
     # запуски, що стартували разом, псують його один одному. Кожен запуск ставить свою копію.
     # Без шляху (збій цього кроку) дія поставить Claude Code сама, як раніше.
     - id: claude_install
+      if: steps.start.outputs.skill != 'merge'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/install-claude.js"
 
     # Після setup/preflight: перевірка провайдера й наявності ключа (секрет не кладеться в GITHUB_ENV).
     - id: provider
+      if: steps.start.outputs.skill != 'merge'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/provider-env.js"
       env:
@@ -105,7 +111,7 @@ runs:
 
     # Нативний Claude через офіційний claude-code-action (лише коли provider == claude).
     - id: claude
-      if: steps.provider.outputs.is_custom != 'true'
+      if: steps.start.outputs.skill != 'merge' && steps.provider.outputs.is_custom != 'true'
       uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
       with:
         path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
@@ -124,11 +130,23 @@ runs:
           --disallowedTools ScheduleWakeup,CronCreate,Monitor,RemoteTrigger
           ${{ steps.start.outputs.model && format('--model {0}', steps.start.outputs.model) || '' }}
 
+    # Детермінований мердж без виклику LLM (#42): повторно перевіряє 4 умови гейту,
+    # виконує squash-мердж, прибирає гілку PR, знімає ai:in-progress і закриває issues.
+    - id: merge
+      if: steps.start.outputs.skill == 'merge'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/merge.js"
+      env:
+        PR: ${{ steps.start.outputs.pr }}
+        ISSUE: ${{ steps.start.outputs.issue }}
+        KANDO_PROMPT: ${{ steps.start.outputs.prompt }}
+        KANDO_APPROVAL: ${{ steps.start.outputs.kando_approval }}
+
     # Сторонній Anthropic-сумісний провайдер (DeepSeek / Z.ai / OpenRouter): запускаємо
     # встановлений бінарник Claude Code напряму з ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN,
     # без передачі секретів Claude і без обмеження validate-env.ts у claude-code-action.
     - id: claude_custom
-      if: steps.provider.outputs.is_custom == 'true'
+      if: steps.start.outputs.skill != 'merge' && steps.provider.outputs.is_custom == 'true'
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/run-custom-provider.js"
       env:
@@ -155,7 +173,7 @@ runs:
       env:
         KANDO_URL: ${{ inputs.kando_url }}
         KANDO_RUN_ID: ${{ inputs.run_id }}
-        CLAUDE_OUTCOME: ${{ steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outcome || steps.claude.outcome }}
+        CLAUDE_OUTCOME: ${{ steps.start.outputs.skill == 'merge' && steps.merge.outcome || (steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outcome || steps.claude.outcome) }}
         EXECUTION_FILE: ${{ steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outputs.execution_file || steps.claude.outputs.execution_file }}
         ISSUE: ${{ steps.start.outputs.issue }}
         PR: ${{ steps.start.outputs.pr }}
