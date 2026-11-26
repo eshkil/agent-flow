@@ -12,6 +12,16 @@ const { secretsFrom } = require('../src/runner/mask');
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'kando-provider-'));
 const silent = { log: () => {} };
 
+function makeFakeChild() {
+  const p = new EventEmitter();
+  p.stdout = new EventEmitter();
+  p.stderr = new EventEmitter();
+  p.stdinData = '';
+  p.stdin = new EventEmitter();
+  p.stdin.end = chunk => { if (chunk) p.stdinData += String(chunk); };
+  return p;
+}
+
 test('resolveProvider: claude за замовчуванням (порожньо / undefined / claude) → не custom', () => {
   for (const provider of [undefined, '', '  ', 'claude', 'CLAUDE']) {
     const r = resolveProvider({ provider, baseUrl: '', env: {} });
@@ -96,13 +106,12 @@ test('checkProvider: відсутній ключ → помилка і failure.j
   assert.equal(saved.exit_code, 1);
   assert.ok(saved.tail.some(l => l.includes('ZAI_API_KEY')));
 
-  // Непридатний RUNNER_TEMP (файл замість теки) не підміняє вихідну помилку про ZAI_API_KEY.
   const fileAsDir = path.join(tmp(), 'not-a-dir');
   fs.writeFileSync(fileAsDir, 'x');
   assert.throws(() => checkProvider({ env: { ...env, RUNNER_TEMP: fileAsDir }, log: silent }), /ZAI_API_KEY/);
 });
 
-test('runCustomProvider: запускає бінарник claude з --plugin-dir, ANTHROPIC_BASE_URL/AUTH_TOKEN, порожніми ключами Claude і пише execution.json', async () => {
+test('runCustomProvider: передає промпт через stdin, прибирає OIDC/чужі ключі з env, чекає close і пише execution.json', async () => {
   const dir = tmp();
   const env = {
     RUNNER_TEMP: dir,
@@ -111,23 +120,29 @@ test('runCustomProvider: запускає бінарник claude з --plugin-di
     KANDO_PROVIDER: 'deepseek',
     KANDO_BASE_URL: 'https://api.deepseek.com/anthropic',
     KANDO_MODEL: 'deepseek-v4-pro',
-    KANDO_PROMPT: 'Виконай triage',
+    KANDO_PROMPT: '--leading-dash Виконай triage',
     KANDO_BOT_LOGIN: 'kando[bot]',
     KANDO_BOT_ID: '77',
     DEEPSEEK_API_KEY: 'sk-ds-secret',
     ZAI_API_KEY: 'other-secret',
     ANTHROPIC_API_KEY: 'sk-ant-should-clear',
     CLAUDE_CODE_OAUTH_TOKEN: 'sk-ant-oat-should-clear',
+    ACTIONS_ID_TOKEN_REQUEST_URL: 'https://actions.test/oidc',
+    ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'oidc-req-secret',
   };
-  let seen;
+  let seen, childRef;
   const spawnImpl = (bin, args, opts) => {
+    const p = makeFakeChild();
     seen = { bin, args, opts };
-    const p = new EventEmitter();
-    p.stdout = new EventEmitter();
-    p.stderr = new EventEmitter();
+    childRef = p;
     setImmediate(() => {
-      p.stdout.emit('data', '{"type":"assistant","message":"ok"}\n{"type":"result","is_error":false,"result":"done"}\n');
+      // Емітуємо exit раніше за останній чанк stdout і close (як буває в Node.js).
+      p.stdout.emit('data', '{"type":"assistant","message":"ok"}\n');
       p.emit('exit', 0, null);
+      setImmediate(() => {
+        p.stdout.emit('data', '{"type":"result","is_error":false,"result":"done"}\n');
+        p.emit('close', 0, null);
+      });
     });
     return p;
   };
@@ -138,12 +153,18 @@ test('runCustomProvider: запускає бінарник claude з --plugin-di
   assert.equal(seen.bin, '/opt/claude/bin/claude');
   assert.ok(seen.args.includes('--plugin-dir') && seen.args.includes('/opt/af/plugin'));
   assert.ok(seen.args.includes('--model') && seen.args.includes('deepseek-v4-pro'));
+  assert.ok(!seen.args.includes('--leading-dash Виконай triage'), 'промпт іде через stdin, не аргументом CLI');
+  assert.equal(childRef.stdinData, '--leading-dash Виконай triage');
+
   assert.equal(seen.opts.env.ANTHROPIC_BASE_URL, 'https://api.deepseek.com/anthropic');
   assert.equal(seen.opts.env.ANTHROPIC_AUTH_TOKEN, 'sk-ds-secret');
   assert.equal(seen.opts.env.ANTHROPIC_API_KEY, '');
   assert.equal(seen.opts.env.CLAUDE_CODE_OAUTH_TOKEN, '');
+  assert.equal(seen.opts.env.ACTIONS_ID_TOKEN_REQUEST_URL, undefined);
+  assert.equal(seen.opts.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN, undefined);
   assert.equal(seen.opts.env.DEEPSEEK_API_KEY, undefined);
   assert.equal(seen.opts.env.ZAI_API_KEY, undefined);
+  assert.equal(seen.opts.env.KANDO_PROMPT, undefined);
   assert.equal(seen.opts.env.GIT_AUTHOR_NAME, 'kando[bot]');
   assert.equal(seen.opts.env.GIT_AUTHOR_EMAIL, '77+kando[bot]@users.noreply.github.com');
 
@@ -155,44 +176,77 @@ test('runCustomProvider: запускає бінарник claude з --plugin-di
   assert.ok(!fs.existsSync(failurePath(env)));
 });
 
-test('runCustomProvider: ненульовий код виходу пише execution.json і failure.json (stage: provider_run)', async () => {
+test('runCustomProvider: exit 0 із result.is_error=true або без result → помилка, execution.json і failure.json', async () => {
+  for (const [label, payload] of [
+    ['is_error=true', '{"type":"result","is_error":true,"result":"429 Too Many Requests"}\n'],
+    ['no result', '{"type":"assistant","message":"cut off"}\n'],
+  ]) {
+    const dir = tmp();
+    const env = {
+      RUNNER_TEMP: dir,
+      KANDO_PROVIDER: 'openrouter',
+      KANDO_MODEL: 'minimax/minimax-m3',
+      KANDO_PROMPT: 'hi',
+      OPENROUTER_API_KEY: 'sk-or-v1-abc',
+    };
+    const spawnImpl = () => {
+      const p = makeFakeChild();
+      setImmediate(() => {
+        p.stdout.emit('data', payload);
+        p.emit('close', 0, null);
+      });
+      return p;
+    };
+    const out = {};
+    const sink = { write: () => true };
+    await assert.rejects(
+      runCustomProvider({ env, spawnImpl, setOutput: (k, v) => { out[k] = v; }, out: sink, err: sink, log: silent }),
+      /помилку сесії/,
+      label
+    );
+    assert.ok(fs.existsSync(out.execution_file), label);
+    const saved = JSON.parse(fs.readFileSync(failurePath(env), 'utf8'));
+    assert.equal(saved.stage, 'provider_run', label);
+  }
+});
+
+test('runCustomProvider: помилка spawn (ENOENT) пише failure.json (stage: provider_run)', async () => {
   const dir = tmp();
   const env = {
     RUNNER_TEMP: dir,
-    KANDO_PROVIDER: 'openrouter',
-    KANDO_MODEL: 'minimax/minimax-m3',
+    CLAUDE_BIN: '/nonexistent/claude',
+    KANDO_PROVIDER: 'deepseek',
+    KANDO_MODEL: 'deepseek-v4-pro',
     KANDO_PROMPT: 'hi',
-    OPENROUTER_API_KEY: 'sk-or-v1-abc',
+    DEEPSEEK_API_KEY: 'sk-ds-123',
   };
   const spawnImpl = () => {
-    const p = new EventEmitter();
-    p.stdout = new EventEmitter();
-    p.stderr = new EventEmitter();
+    const p = makeFakeChild();
     setImmediate(() => {
-      p.stdout.emit('data', '{"type":"result","is_error":true,"result":"429 Too Many Requests"}\n');
-      p.stderr.emit('data', 'rate limit hit\n');
-      p.emit('exit', 1, null);
+      const err = new Error('spawn /nonexistent/claude ENOENT');
+      err.code = 'ENOENT';
+      p.emit('error', err);
     });
     return p;
   };
-  const out = {};
   const sink = { write: () => true };
-  await assert.rejects(
-    runCustomProvider({ env, spawnImpl, setOutput: (k, v) => { out[k] = v; }, out: sink, err: sink, log: silent }),
-    /openrouter.*1/
-  );
-  assert.ok(fs.existsSync(out.execution_file));
+  await assert.rejects(runCustomProvider({ env, spawnImpl, out: sink, err: sink, log: silent }), /ENOENT/);
   const saved = JSON.parse(fs.readFileSync(failurePath(env), 'utf8'));
   assert.equal(saved.stage, 'provider_run');
-  assert.equal(saved.exit_code, 1);
-  assert.ok(saved.tail.some(l => l.includes('rate limit hit')));
+  assert.equal(saved.exit_code, 'ENOENT');
+  assert.ok(saved.tail.some(l => l.includes('ENOENT')));
 });
 
 test('buildClaudeArgs, buildChildEnv, parseStreamJson і mask.secretsFrom', () => {
-  assert.ok(!buildClaudeArgs({ prompt: 'p', pluginDir: '/p', model: '' }).includes('--model'));
+  assert.ok(!buildClaudeArgs({ pluginDir: '/p', model: '' }).includes('--model'));
   assert.deepEqual(parseStreamJson('not-json\n{"a":1}\n\n{"b":2}\n'), [{ a: 1 }, { b: 2 }]);
-  const ce = buildChildEnv({ env: { ANTHROPIC_API_KEY: 'x' }, resolved: { baseUrl: 'https://a', authToken: 't' } });
+  const ce = buildChildEnv({
+    env: { ANTHROPIC_API_KEY: 'x', ACTIONS_ID_TOKEN_REQUEST_URL: 'u', ACTIONS_ID_TOKEN_REQUEST_TOKEN: 't' },
+    resolved: { baseUrl: 'https://a', authToken: 'tok' },
+  });
   assert.equal(ce.ANTHROPIC_API_KEY, '');
+  assert.equal(ce.ACTIONS_ID_TOKEN_REQUEST_URL, undefined);
+  assert.equal(ce.ACTIONS_ID_TOKEN_REQUEST_TOKEN, undefined);
   const secrets = secretsFrom({
     RUNNER_TEMP: tmp(),
     KANDO_MASK_DEEPSEEK_KEY: 'ds-key',
