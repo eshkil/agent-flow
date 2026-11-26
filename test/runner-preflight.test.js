@@ -155,7 +155,7 @@ test('action.yml: перелік утиліт іде в крок finish чере
 
 test('action.yml: крок preflight без умови always — його збій пропускає Claude', () => {
   const step = actionYml.slice(actionYml.indexOf('- id: preflight\n'), actionYml.indexOf('- id: claude_install\n'));
-  assert.doesNotMatch(step, /if:|continue-on-error/);
+  assert.doesNotMatch(step, /always\(|continue-on-error/);
 });
 
 test('кроки до preflight (start, files, heartbeat) не викликають gh — відсутній gh не обриває їх раніше', () => {

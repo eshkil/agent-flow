@@ -97,11 +97,14 @@ test('start: токен у файлі з правами 0600, вихід prompt,
   assert.equal(fs.readFileSync(file, 'utf8'), 'ghs_first');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(out.prompt, 'Рядок 1\nРядок 2');
+  assert.equal(out.provider, 'claude');
+  assert.equal(out.base_url, '');
   assert.equal(out.model, 'claude-opus-5-5');
   assert.equal(out.bot_login, 'kando[bot]');
   assert.equal(out.bot_id, 77);
   assert.equal(out.issue, 5);
   assert.equal(out.pr, '');
+  assert.equal(out.kando_approval, '');
   // Токен старту віддаємо виходом (для claude-code-action) — лише в github_token і під маскою.
   assert.equal(out.github_token, 'ghs_first');
   assert.ok(!Object.entries(out).some(([k, v]) => k !== 'github_token' && String(v).includes('ghs_first')));
@@ -136,6 +139,34 @@ test('start: PATH отримує bin/, git-конфіг іде у setEnv (а н�
   assert.deepEqual(added, ['/opt/af/bin']);
   assert.equal(envSet.GIT_CONFIG_COUNT, '3');
   assert.equal(envSet.GIT_CONFIG_VALUE_1, '/opt/af/bin/git-credential-kando');
+});
+
+test('start: експортує kando_approval як JSON, коли Kando його повертає', async () => {
+  const dir = tmp();
+  const out = {};
+  const withApproval = { ...startResponse, kando_approval: { login: 'eshkil', sha: 'a'.repeat(40) } };
+  await start({
+    env: baseEnv(dir),
+    fetchImpl: fakeFetch({ routes: { '/start': json(200, withApproval) } }),
+    setOutput: (k, v) => { out[k] = v; },
+    log: silent,
+  });
+  assert.deepEqual(JSON.parse(out.kando_approval), { login: 'eshkil', sha: 'a'.repeat(40) });
+});
+
+test('start: експортує provider і base_url від Kando (сторонній провайдер)', async () => {
+  const dir = tmp();
+  const out = {};
+  const custom = { ...startResponse, provider: 'deepseek', model: 'deepseek-v4-pro', base_url: 'https://api.deepseek.com/anthropic' };
+  await start({
+    env: baseEnv(dir),
+    fetchImpl: fakeFetch({ routes: { '/start': json(200, custom) } }),
+    setOutput: (k, v) => { out[k] = v; },
+    log: silent,
+  });
+  assert.equal(out.provider, 'deepseek');
+  assert.equal(out.model, 'deepseek-v4-pro');
+  assert.equal(out.base_url, 'https://api.deepseek.com/anthropic');
 });
 
 // ─── git-конфіг на job ───────────────────────────────────────────────────────
@@ -564,13 +595,39 @@ test('finish: битий failure.json → без failure, /finish надісла
   assert.ok(!('failure' in sent));
 });
 
-test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup', () => {
+test('finish: передає PROVIDER у detectLimit (сторонній провайдер vs claude)', async () => {
+  const dir = tmp();
+  const exec = executionFile(dir, [
+    { type: 'result', is_error: true, result: 'HTTP 429 Insufficient balance. Resets at 2026-11-26T18:00:00Z' },
+  ]);
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'limit' }) } });
+  const ds = await finish({
+    env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: exec, PROVIDER: 'deepseek' }),
+    fetchImpl: f,
+    log: silent,
+  });
+  assert.deepEqual(ds.body.limit, { limited: true, until: '2026-11-26T18:00:00.000Z' });
+
+  const claude = await finish({
+    env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: exec, PROVIDER: 'claude' }),
+    fetchImpl: f,
+    log: silent,
+  });
+  assert.deepEqual(claude.body.limit, { limited: false, until: null });
+});
+
+test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup і files; finish отримує PROVIDER', () => {
   const step = id => actionYml.split(/\n    - id: /).find(b => b.startsWith(id + '\n'));
+  assert.ok(step('finish').includes('PROVIDER: ${{ steps.start.outputs.provider }}'));
   assert.ok(step('finish').includes('KANDO_MASK_CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}'));
   assert.ok(step('finish').includes('KANDO_MASK_API_KEY: ${{ inputs.anthropic_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_ZAI_KEY: ${{ inputs.zai_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_OPENROUTER_KEY: ${{ inputs.openrouter_api_key }}'));
   assert.ok(step('finish').includes('KANDO_MASK_FILES: ${{ inputs.files }}'));
   assert.ok(!step('setup').includes('KANDO_MASK_'));
-  assert.equal(actionYml.split('KANDO_MASK_').length - 1, 3);
+  assert.ok(!step('files').includes('KANDO_MASK_'));
+  assert.equal(actionYml.split('KANDO_MASK_').length - 1, 6);
 });
 
 test('finish: великий кириличний tail урізано до 48 КБ з початку, найновіші рядки лишаються', async () => {

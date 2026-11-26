@@ -16,6 +16,8 @@ const TOKEN_PATTERNS = [
   /\bgithub_pat_\w+/g,
   /\bgh[psou]_\w+/g,
   /\bsk-ant-[\w-]+/g,
+  /\bsk-or-v1-[0-9a-fA-F]{32,}\b/g,
+  /\bsk-[0-9a-fA-F]{24,}\b/g,
 ];
 
 // Рядки файлів «поза git» (KANDO_MASK_FILES = той самий JSON {шлях: base64}, що й
@@ -37,7 +39,13 @@ function fileLines(raw) {
 }
 
 function secretsFrom(env) {
-  const out = [env.KANDO_MASK_CLAUDE_TOKEN, env.KANDO_MASK_API_KEY];
+  const out = [
+    env.KANDO_MASK_CLAUDE_TOKEN,
+    env.KANDO_MASK_API_KEY,
+    env.KANDO_MASK_DEEPSEEK_KEY,
+    env.KANDO_MASK_ZAI_KEY,
+    env.KANDO_MASK_OPENROUTER_KEY,
+  ];
   try { out.push(fs.readFileSync(paths(env).token, 'utf8')); } catch { /* токена ще нема */ }
   if (env.KANDO_MASK_FILES) out.push(...fileLines(env.KANDO_MASK_FILES));
   return [...new Set(out.filter(v => typeof v === 'string').map(v => v.trim()).filter(Boolean))];

@@ -49,3 +49,24 @@ test('mask: префікс секрету, обрізаного на межі р
   assert.equal(out, 'x'.repeat(490) + '***');
   assert.equal(mask('x'.repeat(495) + 'S3CRE', [secret]), 'x'.repeat(495) + 'S3CRE', 'коротше 8 — не чіпаємо');
 });
+
+test('mask: шаблони OpenRouter (sk-or-v1-…) та hex sk-… маскуються без env-змінних', () => {
+  const orKey = `sk-or-v1-${'a1b2c3d4'.repeat(8)}`; // 64 hex
+  const dsKey = `sk-${'deadbeef'.repeat(4)}`;       // 32 hex
+  assert.equal(mask(`err key=${orKey} done`, []), 'err key=*** done');
+  assert.equal(mask(`err key=${dsKey} done`, []), 'err key=*** done');
+  // Короткі або не-hex префікси sk- не маскуються помилково.
+  assert.equal(mask('sk-12345 sk-not-a-hex-key-at-all-zzzzzzzzzz', []), 'sk-12345 sk-not-a-hex-key-at-all-zzzzzzzzzz');
+});
+
+test('secretsFrom: точні ключі KANDO_MASK_DEEPSEEK_KEY, KANDO_MASK_ZAI_KEY, KANDO_MASK_OPENROUTER_KEY маскуються', () => {
+  const env = {
+    RUNNER_TEMP: tmp(),
+    KANDO_MASK_DEEPSEEK_KEY: 'ds-exact-secret-1',
+    KANDO_MASK_ZAI_KEY: 'zaiId123.zaiSecret456',
+    KANDO_MASK_OPENROUTER_KEY: 'or-exact-secret-3',
+  };
+  const s = secretsFrom(env);
+  const out = mask('d=ds-exact-secret-1 z=zaiId123.zaiSecret456 o=or-exact-secret-3', s);
+  assert.equal(out, 'd=*** z=*** o=***');
+});
