@@ -1,7 +1,7 @@
 # Kando: агентний флоу (режим C). Шаблон eshkil/agent-flow/templates/kando-agent.yml
 # Режим C: запуск агента з дошки Kando. Kando сам викликає цей workflow
 # (workflow_dispatch) і передає номер запуску, раннер та середовище.
-# Секрети репо: CLAUDE_CODE_OAUTH_TOKEN або ANTHROPIC_API_KEY.
+# Секрети репо: CLAUDE_CODE_OAUTH_TOKEN або ANTHROPIC_API_KEY (опціонально: DEEPSEEK_API_KEY, ZAI_API_KEY, OPENROUTER_API_KEY).
 # Середовище задає .kando/agent.yml у репо (node, java, python, setup).
 name: Kando agent
 run-name: kando-run-${{ inputs.run_id }}
@@ -42,4 +42,7 @@ jobs:
           env: ${{ inputs.env }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          deepseek_api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          zai_api_key: ${{ secrets.ZAI_API_KEY }}
+          openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           files: ${{ secrets.KANDO_FILES }}
