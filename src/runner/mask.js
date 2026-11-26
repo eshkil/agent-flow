@@ -37,7 +37,13 @@ function fileLines(raw) {
 }
 
 function secretsFrom(env) {
-  const out = [env.KANDO_MASK_CLAUDE_TOKEN, env.KANDO_MASK_API_KEY];
+  const out = [
+    env.KANDO_MASK_CLAUDE_TOKEN,
+    env.KANDO_MASK_API_KEY,
+    env.KANDO_MASK_DEEPSEEK_KEY,
+    env.KANDO_MASK_ZAI_KEY,
+    env.KANDO_MASK_OPENROUTER_KEY,
+  ];
   try { out.push(fs.readFileSync(paths(env).token, 'utf8')); } catch { /* токена ще нема */ }
   if (env.KANDO_MASK_FILES) out.push(...fileLines(env.KANDO_MASK_FILES));
   return [...new Set(out.filter(v => typeof v === 'string').map(v => v.trim()).filter(Boolean))];

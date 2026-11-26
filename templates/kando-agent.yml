@@ -1,6 +1,6 @@
 # Режим C: запуск агента з дошки Kando. Kando сам викликає цей workflow
 # (workflow_dispatch) і передає номер запуску, раннер та середовище.
-# Секрети репо: CLAUDE_CODE_OAUTH_TOKEN або ANTHROPIC_API_KEY.
+# Секрети репо: CLAUDE_CODE_OAUTH_TOKEN або ANTHROPIC_API_KEY (опціонально: DEEPSEEK_API_KEY, ZAI_API_KEY, OPENROUTER_API_KEY).
 # Середовище задає .kando/agent.yml у репо (node, java, python, setup).
 name: Kando agent
 run-name: kando-run-${{ inputs.run_id }}

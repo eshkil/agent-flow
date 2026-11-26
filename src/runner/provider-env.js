@@ -1,6 +1,6 @@
-// Підготовка середовища для Anthropic-сумісних провайдерів (DeepSeek, Z.ai, OpenRouter)
-// усередині наявного claude-code-action. Запускається після setup/preflight і до claude,
-// тож кроки проєкту не бачать API-ключів провайдера.
+// Валідація провайдера й наявності ключа для Anthropic-сумісних провайдерів
+// (DeepSeek, Z.ai, OpenRouter). Секрет у GITHUB_ENV чи GITHUB_OUTPUT не пишеться:
+// його безпосередньо читає крок run-custom-provider.js (ізольовано від setup/files).
 
 const { fileOutput } = require('../output');
 const { writeFailure } = require('./failure');
@@ -18,10 +18,10 @@ const trimSlash = url => String(url || '').trim().replace(/\/+$/, '');
 
 function resolveProvider({ provider, baseUrl, env = {} }) {
   const name = String(provider || 'claude').trim().toLowerCase() || 'claude';
-  const spec = PROVIDERS[name];
-  if (!spec) {
+  if (!Object.hasOwn(PROVIDERS, name)) {
     return { ok: false, stage: 'provider_auth', error: `Невідомий провайдер агента «${name}»` };
   }
+  const spec = PROVIDERS[name];
   const givenUrl = trimSlash(baseUrl);
   if (name === 'claude') {
     if (givenUrl) {
@@ -46,22 +46,21 @@ function resolveProvider({ provider, baseUrl, env = {} }) {
   return { ok: true, provider: name, isCustom: true, baseUrl: resolvedUrl, authToken: token };
 }
 
-function applyProviderEnv({ env, setOutput = () => {}, setEnv = () => {}, log = console }) {
+function recordFailure(env, report) {
+  try { writeFailure(env, report); } catch (_) { /* не заважаємо завершити крок */ }
+}
+
+function checkProvider({ env, setOutput = () => {}, log = console }) {
   const res = resolveProvider({ provider: env.KANDO_PROVIDER, baseUrl: env.KANDO_BASE_URL, env });
   if (!res.ok) {
-    writeFailure(env, { stage: res.stage, command: null, exit_code: 1, tail: [res.error] });
+    recordFailure(env, { stage: res.stage, command: null, exit_code: 1, tail: [res.error] });
     throw new Error(res.error);
   }
   setOutput('provider', res.provider);
   setOutput('is_custom', res.isCustom ? 'true' : 'false');
   setOutput('base_url', res.baseUrl);
   if (res.isCustom) {
-    // Маскуємо до запису в GITHUB_ENV і зануляємо ANTHROPIC_API_KEY, щоб Claude Code
-    // не надсилав конфліктний X-Api-Key на сторонній ендпоінт.
     log.log(`::add-mask::${res.authToken}`);
-    setEnv('ANTHROPIC_BASE_URL', res.baseUrl);
-    setEnv('ANTHROPIC_AUTH_TOKEN', res.authToken);
-    setEnv('ANTHROPIC_API_KEY', '');
     log.log(`Kando: провайдер ${res.provider} (${res.baseUrl})`);
   }
   return res;
@@ -69,10 +68,9 @@ function applyProviderEnv({ env, setOutput = () => {}, setEnv = () => {}, log = 
 
 if (require.main === module) {
   try {
-    applyProviderEnv({
+    checkProvider({
       env: process.env,
       setOutput: fileOutput(process.env.GITHUB_OUTPUT),
-      setEnv: fileOutput(process.env.GITHUB_ENV),
     });
   } catch (e) {
     console.error(`::error::${e.message}`);
@@ -80,4 +78,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { PROVIDERS, resolveProvider, applyProviderEnv };
+module.exports = { PROVIDERS, resolveProvider, checkProvider };

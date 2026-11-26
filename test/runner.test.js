@@ -585,9 +585,12 @@ test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup'
   const step = id => actionYml.split(/\n    - id: /).find(b => b.startsWith(id + '\n'));
   assert.ok(step('finish').includes('KANDO_MASK_CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}'));
   assert.ok(step('finish').includes('KANDO_MASK_API_KEY: ${{ inputs.anthropic_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_ZAI_KEY: ${{ inputs.zai_api_key }}'));
+  assert.ok(step('finish').includes('KANDO_MASK_OPENROUTER_KEY: ${{ inputs.openrouter_api_key }}'));
   assert.ok(step('finish').includes('KANDO_MASK_FILES: ${{ inputs.files }}'));
   assert.ok(!step('setup').includes('KANDO_MASK_'));
-  assert.equal(actionYml.split('KANDO_MASK_').length - 1, 3);
+  assert.equal(actionYml.split('KANDO_MASK_').length - 1, 6);
 });
 
 test('finish: великий кириличний tail урізано до 48 КБ з початку, найновіші рядки лишаються', async () => {
