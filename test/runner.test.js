@@ -595,8 +595,30 @@ test('finish: битий failure.json → без failure, /finish надісла
   assert.ok(!('failure' in sent));
 });
 
-test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup', () => {
+test('finish: передає PROVIDER у detectLimit (сторонній провайдер vs claude)', async () => {
+  const dir = tmp();
+  const exec = executionFile(dir, [
+    { type: 'result', is_error: true, result: 'HTTP 429 Insufficient balance. Resets at 2026-11-26T18:00:00Z' },
+  ]);
+  const f = fakeFetch({ routes: { '/finish': json(200, { status: 'limit' }) } });
+  const ds = await finish({
+    env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: exec, PROVIDER: 'deepseek' }),
+    fetchImpl: f,
+    log: silent,
+  });
+  assert.deepEqual(ds.body.limit, { limited: true, until: '2026-11-26T18:00:00.000Z' });
+
+  const claude = await finish({
+    env: baseEnv(dir, { CLAUDE_OUTCOME: 'failure', EXECUTION_FILE: exec, PROVIDER: 'claude' }),
+    fetchImpl: f,
+    log: silent,
+  });
+  assert.deepEqual(claude.body.limit, { limited: false, until: null });
+});
+
+test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup і files; finish отримує PROVIDER', () => {
   const step = id => actionYml.split(/\n    - id: /).find(b => b.startsWith(id + '\n'));
+  assert.ok(step('finish').includes('PROVIDER: ${{ steps.start.outputs.provider }}'));
   assert.ok(step('finish').includes('KANDO_MASK_CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}'));
   assert.ok(step('finish').includes('KANDO_MASK_API_KEY: ${{ inputs.anthropic_api_key }}'));
   assert.ok(step('finish').includes('KANDO_MASK_DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}'));
@@ -604,6 +626,7 @@ test('action.yml: KANDO_MASK_* лише в env кроку finish, не в setup'
   assert.ok(step('finish').includes('KANDO_MASK_OPENROUTER_KEY: ${{ inputs.openrouter_api_key }}'));
   assert.ok(step('finish').includes('KANDO_MASK_FILES: ${{ inputs.files }}'));
   assert.ok(!step('setup').includes('KANDO_MASK_'));
+  assert.ok(!step('files').includes('KANDO_MASK_'));
   assert.equal(actionYml.split('KANDO_MASK_').length - 1, 6);
 });
 

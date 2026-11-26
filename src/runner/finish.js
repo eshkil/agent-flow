@@ -54,7 +54,10 @@ async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, l
   fs.writeFileSync(p.stop, '');
 
   const outcome = outcomeOf(env.CLAUDE_OUTCOME);
-  const limit = outcome === 'failure' ? detectLimit(readMessages(env.EXECUTION_FILE)) : { limited: false, until: null };
+  const provider = env.PROVIDER || 'claude';
+  const limit = outcome === 'failure'
+    ? detectLimit(readMessages(env.EXECUTION_FILE), { provider })
+    : { limited: false, until: null };
   const numbers = [...new Set([env.ISSUE, env.PR].map(Number).filter(n => Number.isInteger(n) && n > 0))];
   const stuck = await isStuck({ env, numbers, fetchImpl, log });
 
@@ -77,7 +80,7 @@ async function finish({ env, fetchImpl = fetch, sleep, delays = FINISH_DELAYS, l
     return t;
   };
   const res = await call(env.KANDO_URL, `/api/agent/runs/${env.KANDO_RUN_ID}/finish`, body, { oidc, fetchImpl, sleep, delays });
-  log.log(`Kando: підсумок ${outcome}${stuck ? ' (завис ai:in-progress)' : ''}${limit.limited ? ' (ліміт Claude)' : ''}${missing.length ? ` (немає утиліт: ${missing.join(', ')})` : ''} → ${res.status}`);
+  log.log(`Kando: підсумок ${outcome}${stuck ? ' (завис ai:in-progress)' : ''}${limit.limited ? ` (ліміт ${provider === 'claude' ? 'Claude' : provider})` : ''}${missing.length ? ` (немає утиліт: ${missing.join(', ')})` : ''} → ${res.status}`);
   return { body, res };
 }
 
