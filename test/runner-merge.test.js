@@ -370,13 +370,13 @@ test('runMerge: збій PUT /merge → коментар з помилкою, fa
   assert.equal(saved.stage, 'merge');
 });
 
-test('action.yml: при skill == merge пропускає files, setup, preflight, claude_install і claude та викликає merge.js', () => {
+test('action.yml: при skill == merge пропускає files, setup, preflight, claude_install, provider, claude і claude_custom та викликає merge.js', () => {
   const actionYml = fs.readFileSync(path.join(__dirname, '..', 'runner', 'action.yml'), 'utf8');
   const step = id => actionYml.split(/\n    - id: /).find(b => b.startsWith(`${id}\n`));
-  for (const id of ['files', 'setup', 'preflight', 'claude_install', 'claude']) {
-    assert.ok(step(id).includes("if: steps.start.outputs.skill != 'merge'"), `${id} має пропускатись на merge`);
+  for (const id of ['files', 'setup', 'preflight', 'claude_install', 'provider', 'claude', 'claude_custom']) {
+    assert.ok(step(id).includes("steps.start.outputs.skill != 'merge'"), `${id} має пропускатись на merge`);
   }
   assert.ok(step('merge').includes("if: steps.start.outputs.skill == 'merge'"));
   assert.ok(step('merge').includes('src/runner/merge.js'));
-  assert.ok(step('finish').includes("steps.start.outputs.skill == 'merge' && steps.merge.outcome || steps.claude.outcome"));
+  assert.ok(step('finish').includes("steps.start.outputs.skill == 'merge' && steps.merge.outcome || (steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outcome || steps.claude.outcome)"));
 });

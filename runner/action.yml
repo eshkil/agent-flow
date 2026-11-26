@@ -19,6 +19,18 @@ inputs:
     description: ANTHROPIC_API_KEY; або claude_code_oauth_token
     required: false
     default: ''
+  deepseek_api_key:
+    description: DEEPSEEK_API_KEY для провайдера deepseek (ANTHROPIC_BASE_URL)
+    required: false
+    default: ''
+  zai_api_key:
+    description: ZAI_API_KEY для провайдера zai (Z.ai / GLM Coding Plan)
+    required: false
+    default: ''
+  openrouter_api_key:
+    description: OPENROUTER_API_KEY для провайдера openrouter
+    required: false
+    default: ''
   files:
     description: 'Секрет KANDO_FILES: JSON {"<шлях>": "<вміст у base64>"} — файли поза git (.env, google-services.json), які пишуться в робочу копію перед setup'
     required: false
@@ -85,8 +97,21 @@ runs:
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/install-claude.js"
 
-    - id: claude
+    # Після setup/preflight: перевірка провайдера й наявності ключа (секрет не кладеться в GITHUB_ENV).
+    - id: provider
       if: steps.start.outputs.skill != 'merge'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/provider-env.js"
+      env:
+        KANDO_PROVIDER: ${{ steps.start.outputs.provider }}
+        KANDO_BASE_URL: ${{ steps.start.outputs.base_url }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        ZAI_API_KEY: ${{ inputs.zai_api_key }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
+
+    # Нативний Claude через офіційний claude-code-action (лише коли provider == claude).
+    - id: claude
+      if: steps.start.outputs.skill != 'merge' && steps.provider.outputs.is_custom != 'true'
       uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
       with:
         path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
@@ -117,6 +142,26 @@ runs:
         KANDO_PROMPT: ${{ steps.start.outputs.prompt }}
         KANDO_APPROVAL: ${{ steps.start.outputs.kando_approval }}
 
+    # Сторонній Anthropic-сумісний провайдер (DeepSeek / Z.ai / OpenRouter): запускаємо
+    # встановлений бінарник Claude Code напряму з ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN,
+    # без передачі секретів Claude і без обмеження validate-env.ts у claude-code-action.
+    - id: claude_custom
+      if: steps.start.outputs.skill != 'merge' && steps.provider.outputs.is_custom == 'true'
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/run-custom-provider.js"
+      env:
+        CLAUDE_BIN: ${{ steps.claude_install.outputs.path }}
+        KANDO_PLUGIN_DIR: ${{ github.action_path }}/../plugin
+        KANDO_PROVIDER: ${{ steps.start.outputs.provider }}
+        KANDO_BASE_URL: ${{ steps.start.outputs.base_url }}
+        KANDO_MODEL: ${{ steps.start.outputs.model }}
+        KANDO_PROMPT: ${{ steps.start.outputs.prompt }}
+        KANDO_BOT_LOGIN: ${{ steps.start.outputs.bot_login }}
+        KANDO_BOT_ID: ${{ steps.start.outputs.bot_id }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        ZAI_API_KEY: ${{ inputs.zai_api_key }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
+
     # Без успішного start Kando про запуск нічого не знає — звітувати нема чого.
     - id: finish
       if: always() && steps.start.outcome == 'success'
@@ -128,12 +173,15 @@ runs:
       env:
         KANDO_URL: ${{ inputs.kando_url }}
         KANDO_RUN_ID: ${{ inputs.run_id }}
-        CLAUDE_OUTCOME: ${{ steps.start.outputs.skill == 'merge' && steps.merge.outcome || steps.claude.outcome }}
-        EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+        CLAUDE_OUTCOME: ${{ steps.start.outputs.skill == 'merge' && steps.merge.outcome || (steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outcome || steps.claude.outcome) }}
+        EXECUTION_FILE: ${{ steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outputs.execution_file || steps.claude.outputs.execution_file }}
         ISSUE: ${{ steps.start.outputs.issue }}
         PR: ${{ steps.start.outputs.pr }}
         MISSING_TOOLS: ${{ steps.preflight.outputs.missing }}
         # Секрети лише для маскування звіту про збій; кроки setup/files їх не отримують.
         KANDO_MASK_CLAUDE_TOKEN: ${{ inputs.claude_code_oauth_token }}
         KANDO_MASK_API_KEY: ${{ inputs.anthropic_api_key }}
+        KANDO_MASK_DEEPSEEK_KEY: ${{ inputs.deepseek_api_key }}
+        KANDO_MASK_ZAI_KEY: ${{ inputs.zai_api_key }}
+        KANDO_MASK_OPENROUTER_KEY: ${{ inputs.openrouter_api_key }}
         KANDO_MASK_FILES: ${{ inputs.files }}

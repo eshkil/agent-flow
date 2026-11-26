@@ -26,6 +26,8 @@ async function start({ env, fetchImpl = fetch, setOutput = () => {}, setEnv = ()
   // а claude-code-action вшиє саме цей токен в origin, і insteadOf мусить збігтись із ним.
   setOutput('github_token', res.github_token);
   setOutput('prompt', res.prompt);
+  setOutput('provider', res.provider || 'claude');
+  setOutput('base_url', res.base_url || '');
   setOutput('model', res.model || '');
   setOutput('skill', res.skill || '');
   setOutput('mode', res.mode || '');
@@ -34,7 +36,7 @@ async function start({ env, fetchImpl = fetch, setOutput = () => {}, setEnv = ()
   setOutput('issue', res.issue ?? '');
   setOutput('pr', res.pr ?? '');
   setOutput('kando_approval', res.kando_approval ? JSON.stringify(res.kando_approval) : '');
-  log.log(`Kando: запуск ${env.KANDO_RUN_ID}, скіл ${res.skill}/${res.mode}, токен до ${res.expires_at}`);
+  log.log(`Kando: запуск ${env.KANDO_RUN_ID}, провайдер ${res.provider || 'claude'}, скіл ${res.skill}/${res.mode}, токен до ${res.expires_at}`);
   return res;
 }
 
