@@ -66,3 +66,123 @@ test('readMessages: файл з масивом / відсутній / зіпсо
   assert.deepEqual(readMessages(bad), []);
   assert.deepEqual(readMessages(''), []);
 });
+
+test('detectLimit (сторонні провайдери): 429 / rate_limit_error / quota / balance / credits / usage limit → limited: true', () => {
+  const cases = [
+    ['deepseek', 'API Error: 429 Too Many Requests'],
+    ['deepseek', 'Insufficient Balance: please top up your account'],
+    ['zai', 'rate_limit_error: requests per minute exceeded'],
+    ['zai', 'Quota exceeded for current plan'],
+    ['openrouter', 'HTTP 429: Insufficient credits on OpenRouter'],
+    ['openrouter', 'Monthly usage limit has been reached'],
+    ['deepseek', 'Daily limit reached'],
+    ['openrouter', 'You hit your limit for today'],
+  ];
+  for (const [provider, text] of cases) {
+    const r = detectLimit([init, result({ is_error: true, result: text })], { provider });
+    assert.deepEqual(r, { limited: true, until: null }, `${provider}: ${text}`);
+  }
+});
+
+test('detectLimit (сторонні провайдери): assistant з error та rate_limit_event rejected', () => {
+  const asstErr = {
+    type: 'assistant',
+    error: 'api_error',
+    message: { role: 'assistant', content: [{ type: 'text', text: '429 Too many requests' }] },
+  };
+  assert.deepEqual(detectLimit([init, asstErr], { provider: 'deepseek' }), { limited: true, until: null });
+  assert.deepEqual(detectLimit([init, assistantErr], { provider: 'zai' }), { limited: true, until: null });
+
+  const withEvent = detectLimit([init, rle('rejected', 1760461200000)], { provider: 'openrouter' });
+  assert.equal(withEvent.limited, true);
+  assert.equal(withEvent.until.toISOString(), '2025-10-14T17:00:00.000Z');
+});
+
+test('detectLimit (сторонні провайдери): витягання until із Retry-After (сек / HTTP-дата), ISO-дати, resetsAt (сек / мс)', () => {
+  const now = Date.parse('2026-11-26T12:00:00.000Z');
+
+  const retrySec = detectLimit(
+    [init, result({ is_error: true, result: '429 Too Many Requests. Retry-After: 120' })],
+    { provider: 'deepseek', now }
+  );
+  assert.equal(retrySec.limited, true);
+  assert.equal(retrySec.until.toISOString(), '2026-11-26T12:02:00.000Z');
+
+  const retryHttp = detectLimit(
+    [init, result({ is_error: true, result: '429 Too Many Requests; Retry-After: Thu, 26 Nov 2026 14:30:00 GMT.' })],
+    { provider: 'openrouter', now }
+  );
+  assert.equal(retryHttp.limited, true);
+  assert.equal(retryHttp.until.toISOString(), '2026-11-26T14:30:00.000Z');
+
+  const iso = detectLimit(
+    [init, result({ is_error: true, result: 'Quota exceeded, resets at 2026-11-26T18:00:00Z' })],
+    { provider: 'zai', now }
+  );
+  assert.equal(iso.limited, true);
+  assert.equal(iso.until.toISOString(), '2026-11-26T18:00:00.000Z');
+
+  const resetsSec = detectLimit(
+    [init, result({ is_error: true, result: 'rate_limit_error {"resetsAt": 1760461200}' })],
+    { provider: 'deepseek', now }
+  );
+  assert.equal(resetsSec.limited, true);
+  assert.equal(resetsSec.until.toISOString(), '2025-10-14T17:00:00.000Z');
+
+  const resetsMs = detectLimit(
+    [init, result({ is_error: true, result: 'rate_limit_error', resetsAt: 1760461200000 })],
+    { provider: 'openrouter', now }
+  );
+  assert.equal(resetsMs.limited, true);
+  assert.equal(resetsMs.until.toISOString(), '2025-10-14T17:00:00.000Z');
+});
+
+test('detectLimit (сторонні провайдери): немає хибних спрацьовувань на успіху, тексті assistant без помилки та звичайних помилках', () => {
+  // Успішний результат, що згадує 429 і rate_limit_error.
+  assert.deepEqual(
+    detectLimit([init, result({ is_error: false, result: 'Додав обробку 429 Too Many Requests та insufficient balance' })], { provider: 'deepseek' }),
+    { limited: false, until: null }
+  );
+  // Звичайне повідомлення assistant без поля error + звичайна помилка 500 у result.
+  const normalAssistant = {
+    type: 'assistant',
+    message: { role: 'assistant', content: [{ type: 'text', text: 'Обробляємо HTTP 429 і rate_limit_error' }] },
+  };
+  assert.deepEqual(
+    detectLimit([init, normalAssistant, result({ is_error: true, result: 'HTTP 500 Internal Server Error: SyntaxError at line 4290' })], { provider: 'openrouter' }),
+    { limited: false, until: null }
+  );
+  // Для claude поведінка не змінилася: 429 без rate_limit_event / LIMIT_TEXT не вважається лімітом.
+  assert.deepEqual(
+    detectLimit([init, result({ is_error: true, result: 'API Error: 429 Insufficient balance' })], { provider: 'claude' }),
+    { limited: false, until: null }
+  );
+  // Звичайна помилка зі згадкою номера рядка/тікета 429 не вважається лімітом.
+  assert.deepEqual(
+    detectLimit([init, result({ is_error: true, result: 'TypeError at file.js:429 (issue #429)' })], { provider: 'deepseek' }),
+    { limited: false, until: null }
+  );
+});
+
+test('detectLimit (сторонні провайдери): Retry-After з ISO-датою та захист від переповнення Date', () => {
+  const now = Date.parse('2026-11-26T12:00:00.000Z');
+  const retryIso = detectLimit(
+    [init, result({ is_error: true, result: 'HTTP 429 Too Many Requests; Retry-After: 2026-11-26T18:00:00Z' })],
+    { provider: 'deepseek', now }
+  );
+  assert.equal(retryIso.limited, true);
+  assert.equal(retryIso.until.toISOString(), '2026-11-26T18:00:00.000Z');
+
+  // Переповнений resetsAt / Retry-After дає until: null, а не Invalid Date.
+  const hugeReset = detectLimit(
+    [init, result({ is_error: true, result: 'rate_limit_error {"resetsAt": 9999999999999999}' })],
+    { provider: 'zai', now }
+  );
+  assert.deepEqual(hugeReset, { limited: true, until: null });
+
+  const hugeRetry = detectLimit(
+    [init, result({ is_error: true, result: 'HTTP 429; Retry-After: 999999999999999' })],
+    { provider: 'openrouter', now }
+  );
+  assert.deepEqual(hugeRetry, { limited: true, until: null });
+});

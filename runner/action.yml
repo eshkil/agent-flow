@@ -173,6 +173,7 @@ runs:
       env:
         KANDO_URL: ${{ inputs.kando_url }}
         KANDO_RUN_ID: ${{ inputs.run_id }}
+        PROVIDER: ${{ steps.start.outputs.provider }}
         CLAUDE_OUTCOME: ${{ steps.start.outputs.skill == 'merge' && steps.merge.outcome || (steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outcome || steps.claude.outcome) }}
         EXECUTION_FILE: ${{ steps.provider.outputs.is_custom == 'true' && steps.claude_custom.outputs.execution_file || steps.claude.outputs.execution_file }}
         ISSUE: ${{ steps.start.outputs.issue }}
