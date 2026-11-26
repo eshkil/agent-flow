@@ -19,6 +19,18 @@ inputs:
     description: ANTHROPIC_API_KEY; або claude_code_oauth_token
     required: false
     default: ''
+  deepseek_api_key:
+    description: DEEPSEEK_API_KEY для провайдера deepseek (ANTHROPIC_BASE_URL)
+    required: false
+    default: ''
+  zai_api_key:
+    description: ZAI_API_KEY для провайдера zai (Z.ai / GLM Coding Plan)
+    required: false
+    default: ''
+  openrouter_api_key:
+    description: OPENROUTER_API_KEY для провайдера openrouter
+    required: false
+    default: ''
   files:
     description: 'Секрет KANDO_FILES: JSON {"<шлях>": "<вміст у base64>"} — файли поза git (.env, google-services.json), які пишуться в робочу копію перед setup'
     required: false
@@ -80,13 +92,25 @@ runs:
       shell: bash
       run: node "$GITHUB_ACTION_PATH/../src/runner/install-claude.js"
 
+    # Після setup/preflight: ключі сторонніх провайдерів не потрапляють у команди проєкту.
+    # Для deepseek / zai / openrouter виставляє ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN.
+    - id: provider
+      shell: bash
+      run: node "$GITHUB_ACTION_PATH/../src/runner/provider-env.js"
+      env:
+        KANDO_PROVIDER: ${{ steps.start.outputs.provider }}
+        KANDO_BASE_URL: ${{ steps.start.outputs.base_url }}
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek_api_key }}
+        ZAI_API_KEY: ${{ inputs.zai_api_key }}
+        OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
+
     - id: claude
       uses: anthropics/claude-code-action@acfe7992852970efb4fee683d63d628e3e52df67 # v1.0.286
       with:
         path_to_claude_code_executable: ${{ steps.claude_install.outputs.path }}
         prompt: ${{ steps.start.outputs.prompt }}
-        claude_code_oauth_token: ${{ inputs.claude_code_oauth_token }}
-        anthropic_api_key: ${{ inputs.anthropic_api_key }}
+        claude_code_oauth_token: ${{ steps.provider.outputs.is_custom == 'true' && '' || inputs.claude_code_oauth_token }}
+        anthropic_api_key: ${{ steps.provider.outputs.is_custom == 'true' && '' || inputs.anthropic_api_key }}
         github_token: ${{ steps.start.outputs.github_token }}
         bot_name: ${{ steps.start.outputs.bot_login }}
         # Kando запускає workflow токеном App, тож github.actor — бот; без цього

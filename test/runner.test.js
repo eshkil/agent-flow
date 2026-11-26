@@ -97,6 +97,8 @@ test('start: токен у файлі з правами 0600, вихід prompt,
   assert.equal(fs.readFileSync(file, 'utf8'), 'ghs_first');
   assert.equal(fs.statSync(file).mode & 0o777, 0o600);
   assert.equal(out.prompt, 'Рядок 1\nРядок 2');
+  assert.equal(out.provider, 'claude');
+  assert.equal(out.base_url, '');
   assert.equal(out.model, 'claude-opus-5-5');
   assert.equal(out.bot_login, 'kando[bot]');
   assert.equal(out.bot_id, 77);
@@ -136,6 +138,21 @@ test('start: PATH отримує bin/, git-конфіг іде у setEnv (а н�
   assert.deepEqual(added, ['/opt/af/bin']);
   assert.equal(envSet.GIT_CONFIG_COUNT, '3');
   assert.equal(envSet.GIT_CONFIG_VALUE_1, '/opt/af/bin/git-credential-kando');
+});
+
+test('start: експортує provider і base_url від Kando (сторонній провайдер)', async () => {
+  const dir = tmp();
+  const out = {};
+  const custom = { ...startResponse, provider: 'deepseek', model: 'deepseek-v4-pro', base_url: 'https://api.deepseek.com/anthropic' };
+  await start({
+    env: baseEnv(dir),
+    fetchImpl: fakeFetch({ routes: { '/start': json(200, custom) } }),
+    setOutput: (k, v) => { out[k] = v; },
+    log: silent,
+  });
+  assert.equal(out.provider, 'deepseek');
+  assert.equal(out.model, 'deepseek-v4-pro');
+  assert.equal(out.base_url, 'https://api.deepseek.com/anthropic');
 });
 
 // ─── git-конфіг на job ───────────────────────────────────────────────────────
