@@ -46,10 +46,12 @@ test('README і скіли: коло блоку — пара review_head і roun
   assert.match(readme(), /для `head` і `round` найновішого довіреного рев'ю немає довіреного `kando:triage`/);
 });
 
-// Рев'ю PR #37, R2: довіра до будь-якого бота — описане обмеження.
-test('README: довіра до бота за типом, а не за логіном — описано ризик', () => {
+// Рев'ю PR #37, R2: бот довіряється лише за логіном з рядка «Бот Kando», а не за типом.
+test('README: бот Kando — за логіном з промпту; ручний запуск — людина називає бота', () => {
   const r = readme();
-  assert.match(r, /бот довіряється за типом \(`user\.type == "Bot"`\), а не за логіном/);
-  assert.match(r, /`github-actions\[bot\]`/);
-  assert.match(r, /не вмикайте автоцикл/);
+  assert.ok(r.includes('- `- Бот Kando: <login>`'), 'рядок промпту в переліку');
+  assert.match(r, /інших ботів \(`github-actions\[bot\]` тощо\), не\s+враховуються/);
+  assert.match(r, /«виправ PR #M за рішенням розбору, бот Kando: kando-board-app\[bot\]»/);
+  assert.doesNotMatch(r, /Обмеження довіри/);
+  assert.doesNotMatch(r, /бот довіряється за типом/);
 });
