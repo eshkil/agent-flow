@@ -164,7 +164,7 @@ git pull --ff-only
 у PR: лише шлях до файла в гілці — не доказ. Посилання — за видимістю репозиторію:
 
 ```bash
-VIS=$(gh repo view "$REPO" --json visibility -q .visibility)   # PUBLIC / PRIVATE / INTERNAL
+VIS=$(gh api "repos/$REPO" --jq .visibility)   # public / private / internal
 ```
 
 - **PUBLIC** → `https://raw.githubusercontent.com/$REPO/<гілка>/docs/evidence/<файл>.png`

@@ -545,7 +545,7 @@ test('pr-fix: блок kando:fix лише в режимі auto, перед пі�
 test('pr-fix: нові чи перезняті скріншоти — картинками в підсумку й в описі PR, посилання за видимістю', () => {
   const s = skill('pr-fix');
   const sec = s.slice(s.indexOf('## Крок 3'), s.indexOf('## Не вдається'));
-  assert.match(sec, /VIS=\$\(gh repo view/);
+  assert.match(sec, /VIS=\$\(gh api "repos\/\$REPO" --jq \.visibility\)/);
   assert.ok(sec.includes('https://raw.githubusercontent.com/$REPO/<гілка>/docs/evidence/<файл>.png'));
   assert.ok(sec.includes('https://github.com/$REPO/blob/<гілка>/docs/evidence/<файл>.png?raw=true'));
   assert.match(sec, /лише шлях до файла[^\n]*не доказ/);
