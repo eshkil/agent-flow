@@ -257,9 +257,9 @@ test('merge: ai:in-progress знімається на гейті, після gh 
   assert.match(failPara, /Виконай крок «Відпустити задачу в Kando»/);
 });
 
-test('плагін: версія 1.2.1', () => {
+test('плагін: версія 1.2.2', () => {
   const p = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'plugin', '.claude-plugin', 'plugin.json'), 'utf8'));
-  assert.equal(p.version, '1.2.1');
+  assert.equal(p.version, '1.2.2');
 });
 
 // PR лише з документацією: повна сюїта цих змін не перевіряє, а на великому проєкті займає
@@ -541,6 +541,17 @@ test('pr-fix: блок kando:fix лише в режимі auto, перед пі�
   assert.ok(s.includes('<!-- kando:fix {"v":1,"round":<N>,"review_head":"<sha>","fixed":["R1"],"not_fixed":[{"id":"R2","reason":"…"}]} -->'));
   assert.match(s, /Поза режимом auto блок не додавати/);
   assert.match(s, /повторне рев'ю запустить Kando/);
+});
+test('pr-fix: нові чи перезняті скріншоти — картинками в підсумку й в описі PR, посилання за видимістю', () => {
+  const s = skill('pr-fix');
+  const sec = s.slice(s.indexOf('## Крок 3'), s.indexOf('## Не вдається'));
+  assert.match(sec, /VIS=\$\(gh repo view/);
+  assert.ok(sec.includes('https://raw.githubusercontent.com/$REPO/<гілка>/docs/evidence/<файл>.png'));
+  assert.ok(sec.includes('https://github.com/$REPO/blob/<гілка>/docs/evidence/<файл>.png?raw=true'));
+  assert.match(sec, /лише шлях до файла[^\n]*не доказ/);
+  assert.match(sec, /`## Скріншоти`/);
+  assert.match(sec, /gh pr edit \$PR -R "\$REPO" --body-file/);
+  assert.ok(sec.includes('![<що на скріншоті>](<IMG_URL'));
 });
 test('pr-fix: коміт на пункт з id', () => {
   assert.ok(skill('pr-fix').includes('fix: <суть> (<id>, рев\'ю #$PR)'));
